@@ -1,0 +1,23 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Template: Create Puzzle",
+            "type": "shell",
+            "command": "bash ./template.sh create ${input:year} ${input:day}",
+            "problemMatcher": []
+        }
+    ],
+    "inputs": [
+        {
+            "id": "year",
+            "description": "year of the current puzzle",
+            "type": "promptString"
+        },
+        {
+            "id": "day",
+            "description": "day of the current puzzle",
+            "type": "promptString"
+        }
+    ]
+}

@@ -1,0 +1,9 @@
+[package]
+name = "advent-of-code"
+version = "0.1.0"
+edition = "2021"
+authors = ["Shirotha"]
+
+[dependencies]
+dialoguer = { version = "0.11.0", features = [] }
+inventory = "0.3.13"
