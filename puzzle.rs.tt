@@ -1,0 +1,39 @@
+use std::borrow::Cow;
+use crate::{Puzzle, Answer};
+
+pub fn part1(input: &str) -> Answer {
+    todo!()
+}
+
+pub fn part2(input: &str) -> Answer {
+    todo!()
+}
+
+inventory::submit! { Puzzle::new($year, $day, 1, part1) }
+inventory::submit! { Puzzle::new($year, $day, 2, part2) }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use indoc::indoc;
+
+    const INPUT1: &str = indoc! {"
+    
+    "};
+    const OUTPUT1: &str = "";
+
+    const INPUT2: &str = indoc!{"
+    
+    "};
+    const OUTPUT2: &str = "";
+
+    #[test]
+    fn test1() {
+        assert_eq!(OUTPUT1, &part1(INPUT1).unwrap());
+    }
+
+    #[test]
+    fn test2() {
+        assert_eq!(OUTPUT2, &part2(INPUT2).unwrap());
+    }
+}

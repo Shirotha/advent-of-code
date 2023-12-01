@@ -4,7 +4,7 @@
         {
             "label": "Template: Create Puzzle",
             "type": "shell",
-            "command": "bash ./template.sh create ${input:year} ${input:day}",
+            "command": "nu ./create-puzzle.nu ${input:year} ${input:day}",
             "problemMatcher": []
         }
     ],
