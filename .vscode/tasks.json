@@ -4,20 +4,88 @@
         {
             "label": "Template: Create Puzzle",
             "type": "shell",
-            "command": "nu ./create-puzzle.nu ${input:year} ${input:day}",
+            "command": "nu ./create-puzzle.nu ${input:pickYear} ${input:pickDay}",
+            "dependsOn": ["List Years", "List Days"],
+            "problemMatcher": []
+        },
+        {
+            "label": "Run Puzzle",
+            "type": "shell",
+            "command": "cargo run --release -- solve ${input:pickYear} ${input:pickDay} ${input:pickPart}",
+            "dependsOn": ["List Years", "List Days", "List Parts"],
+            "problemMatcher": []
+        },
+        {
+            "label": "List Years",
+            "type": "shell",
+            "command": "cargo run --release -- list > ${workspaceFolder}/.vscode/.years",
+            "problemMatcher": []
+        },
+        {
+            "label": "List Days",
+            "type": "shell",
+            "command": "cargo run --release -- list ${input:pickYear} > ${workspaceFolder}/.vscode/.days",
+            "dependsOn": ["List Years"],
+            "problemMatcher": []
+        },
+        {
+            "label": "List Parts",
+            "type": "shell",
+            "command": "cargo run --release -- list ${input:pickYear} ${input:pickDay} > ${workspaceFolder}/.vscode/.parts",
+            "dependsOn": ["List Years", "List Days"],
             "problemMatcher": []
         }
     ],
     "inputs": [
         {
-            "id": "year",
-            "description": "year of the current puzzle",
-            "type": "promptString"
+            "id": "pickYear",
+            "type": "command",
+            "command": "extension.commandvariable.pickStringRemember",
+            "args": {
+                "key": "year",
+                "description": "year of the current puzzle",
+                "options": [{
+                    "label": "new",
+                    "description": "choose different year",
+                    "value": "${promptStringRemember:promptYear}"
+                }],
+                "fileName": "${workspaceFolder}/.vscode/.years",
+                "promptStringRemember": {
+                    "promptYear": {
+                        "description": "year of the current puzzle"
+                    }
+                }
+            }
         },
         {
-            "id": "day",
-            "description": "day of the current puzzle",
-            "type": "promptString"
+            "id": "pickDay",
+            "type": "command",
+            "command": "extension.commandvariable.pickStringRemember",
+            "args": {
+                "key": "day",
+                "description": "day of the current puzzle",
+                "options": [{
+                    "label": "new",
+                    "description": "choose different day",
+                    "value": "${promptStringRemember:promptDay}"
+                }],
+                "fileName": "${workspaceFolder}/.vscode/.days",
+                "promptStringRemember": {
+                    "promptDay": {
+                        "description": "year of the current puzzle"
+                    }
+                }
+            }
+        },
+        {
+            "id": "pickPart",
+            "type": "command",
+            "command": "extension.commandvariable.pickStringRemember",
+            "args": {
+                "key": "part",
+                "description": "part of the current puzzle",
+                "fileName": "${workspaceFolder}/.vscode/.parts",
+            }
         }
     ]
 }

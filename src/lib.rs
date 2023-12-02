@@ -1,15 +1,17 @@
+#![feature(iterator_try_collect)]
+
 pub mod puzzles;
 
-use std::borrow::Cow;
+use std::{borrow::Cow, error::Error};
 use thiserror::Error;
-use miette::{Diagnostic, SourceSpan, NamedSource};
+use miette::Diagnostic;
 
 #[derive(Debug, Error, Diagnostic)]
 pub enum PuzzleError {
     #[error(transparent)]
     IoError(#[from] std::io::Error),
     #[error("parsing failed")]
-    ParseError(#[source_code] NamedSource, #[label("here")] SourceSpan)
+    ParseError(#[from] Box<dyn Error>)
 }
 
 pub type Answer<'a> = Result<Cow<'a, str>, PuzzleError>;
@@ -31,13 +33,19 @@ impl Puzzle {
     pub const fn new(year: u16, day: u8, part: u8, solution: Solver) -> Self {
         Puzzle { year, day, part, solution }
     }
-    pub fn solve<'a>(&self, input: &'a str) -> Answer<'a> { (self.solution)(input) }
     #[inline(always)] pub const fn year(&self) -> u16 { self.year }
     #[inline(always)] pub const fn day(&self) -> u8 { self.day }
     #[inline(always)] pub const fn part(&self) -> u8 { self.part }
+    
+    pub fn solve<'a>(&self, input: &'a str) -> Answer<'a> { (self.solution)(input) }
 }
 
 inventory::collect!(Puzzle);
 
-fn test(input: &str) -> Answer { Ok(Cow::Borrowed(input)) }
-inventory::submit! { Puzzle::new(1,1,1,test) }
+pub fn parse<T, F>(input: &str, parser: F) -> Result<T, PuzzleError> 
+    where F: FnOnce(&str) -> nom::IResult<&str, T>
+{
+    let (_, result) = parser(input)
+        .map_err( |err| PuzzleError::ParseError(err.to_owned().into()) )?;
+    Ok(result)
+}
