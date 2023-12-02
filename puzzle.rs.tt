@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use crate::{Puzzle, Answer};
+use crate::*;
 
 pub fn part1(input: &str) -> Answer {
     todo!()
