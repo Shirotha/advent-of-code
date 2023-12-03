@@ -6,6 +6,7 @@ use nom::{
     branch::alt,
     combinator::{map, value, verify, eof},
 };
+use smallvec::SmallVec;
 use crate::{*, parse::*};
 
 fn digit(input: &str) -> IResult<&str, u8> {
@@ -37,7 +38,7 @@ fn sum<F>(input: &str, parser: F) -> Result<usize, PuzzleError>
         move |input| many_overlapping_till(parser.clone(), eof)(input)
     ))?;
     let sum = digits.into_iter()
-        .map( |line| Some(line.first()? * 10 + line.last()?) )
+        .map( |line: SmallVec<[u8; 4]>| Some(line.first()? * 10 + line.last()?) )
         .fold(0, |s, n| s + n.unwrap_or(0) as usize );
     Ok(sum)
 }

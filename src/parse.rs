@@ -4,6 +4,7 @@ use nom::{
     InputTake
 };
 use rayon::prelude::*;
+use smallvec::SmallVec;
 use crate::*;
 
 pub fn parse<'a, O, F>(input: &'a str, mut f: F) -> Result<O, PuzzleError> 
@@ -30,7 +31,7 @@ where
 }
 
 #[inline]
-pub fn many_overlapping_till<I, O1, O2, E, F, G>(f: F, g: G) -> impl FnMut(I) -> IResult<I, Vec<O1>>
+pub fn many_overlapping_till<const N: usize, I, O1, O2, E, F, G>(f: F, g: G) -> impl FnMut(I) -> IResult<I, SmallVec<[O1; N]>>
 where
     I: Clone + InputTake,
     F: Clone + Parser<I, O1, E>,
@@ -38,7 +39,7 @@ where
     E: ParseError<I>,
 {
     move |mut input| {
-        let (mut f, mut g, mut result) = (f.clone(), g.clone(), Vec::new());
+        let (mut f, mut g, mut result) = (f.clone(), g.clone(), SmallVec::new());
         loop {
             if let Ok((_, digit)) = f.parse(input.clone()) { result.push(digit); }
             match g.parse(input.clone()) {
