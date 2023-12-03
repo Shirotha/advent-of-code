@@ -3,7 +3,7 @@
 pub mod puzzles;
 mod parse;
 
-use std::borrow::Cow;
+use std::{borrow::Cow, collections::HashMap};
 use thiserror::Error;
 use miette::Diagnostic;
 
@@ -43,5 +43,7 @@ impl Puzzle {
     
     pub fn solve<'a>(&self, input: &'a str) -> Answer<'a> { (self.solution)(input) }
 }
+
+pub type Puzzles<'a> = HashMap<u16, HashMap<u8, HashMap<u8, &'a Puzzle>>>;
 
 inventory::collect!(Puzzle);

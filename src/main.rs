@@ -2,38 +2,13 @@ use std::{
     collections::HashMap,
     fmt::Display,
     fs::read_to_string,
-    time::Instant,
-    env::args
+    time::Instant
 };
-use dialoguer::{theme::ColorfulTheme, Select};
 use itertools::Itertools;
-use tap::Tap;
+use tap::{Tap, Pipe};
+use clap::{Parser, Subcommand, Args};
 use miette::{Result, IntoDiagnostic};
-use advent_of_code::{Puzzle, default_input_file, PuzzleError};
-
-fn select_key<'a, K, V>(prompt: &str, options: &'a HashMap<K, V>) -> Result<&'a K>
-    where K: Display + Ord
-{
-    match options.len() {
-        0 => Err(PuzzleError::ArgumentError("no valid options".to_owned(), prompt.to_owned()))?,
-        1 => {
-            let key = options.keys().next().unwrap();
-            println!("{} {}", prompt, key);
-            Ok(key)
-        },
-        _ => {
-            let items = options.keys().collect_vec()
-                .tap_mut( |col| col.sort_unstable() );
-            let index = Select::with_theme(&ColorfulTheme::default())
-                .with_prompt(prompt)
-                .items(&items)
-                .default(items.len() - 1)
-                .interact()
-                .into_diagnostic()?;
-            Ok(items[index])
-        }
-    }
-}
+use advent_of_code::*;
 
 fn print_keys<K, V>(data: &HashMap<K, V>)
     where K: Display + Ord
@@ -45,59 +20,82 @@ fn print_keys<K, V>(data: &HashMap<K, V>)
     }
 }
 
-fn main() -> miette::Result<()> {
-    let mut puzzles = HashMap::new();
-    for puzzle in inventory::iter::<Puzzle> {
-        puzzles.entry(puzzle.year())
-            .or_insert_with(HashMap::new)
-            .entry(puzzle.day())
-            .or_insert_with(HashMap::new)
-            .insert(puzzle.part(), puzzle);
+#[derive(Debug, Parser)]
+#[command(arg_required_else_help = true)]
+struct Cli {
+    #[command(subcommand)]
+    command: Command
+}
+#[derive(Debug, Subcommand)]
+enum Command {
+    Solve(Solve),
+    List(List)
+}
+impl Command {
+    fn run(self, puzzles: &Puzzles) -> Result<()> {
+        match self {
+            Command::Solve(solve) => solve.solve(puzzles),
+            Command::List(list) => list.list(puzzles),
+        }
     }
-    let mut args = args().skip(1);
-    match args.next().as_deref() {
-        Some("solve") => {
-            let year = if let Some(year) = args.next() { year.parse::<u16>().into_diagnostic()? } 
-                else { *select_key("year", &puzzles)? };
+}
+#[derive(Debug, Args)]
+#[command(arg_required_else_help = true)]
+struct Solve {
+    year: u16,
+    day: u8,
+    part: u8,
+    input: Option<String>
+}
+impl Solve {
+    fn solve(self, puzzles: &Puzzles) -> Result<()> {
+        let puzzle = puzzles.get(&self.year)
+            .ok_or_else( || PuzzleError::ArgumentError("invalid year".to_owned(), self.year.to_string()))?
+            .get(&self.day)
+            .ok_or_else( || PuzzleError::ArgumentError("invalid day".to_owned(), self.day.to_string()))?
+            .get(&self.part)
+            .ok_or_else( || PuzzleError::ArgumentError("invalid part".to_owned(), self.day.to_string()))?;
+        let input = self.input
+            .unwrap_or_else( || default_input_file("./src/puzzles", self.year, self.day, self.part) )
+            .pipe(read_to_string).into_diagnostic()?;
+        let timer = Instant::now();
+        let result = puzzle.solve(&input)?;
+        let duration = timer.elapsed();
+        println!("solved in {:.2?}    result: {}", duration, result);
+        Ok(())
+    }
+}
+#[derive(Debug, Args)]
+struct List {
+    year: Option<u16>,
+    day: Option<u8>
+}
+impl List {
+    fn list(self, puzzles: &Puzzles) -> Result<()> {
+        if let Some(year) = self.year {
             let puzzles = puzzles.get(&year)
-                .ok_or_else( || PuzzleError::ArgumentError("year not found".to_owned(), year.to_string()) )?;
-            let day = if let Some(day) = args.next() { day.parse::<u8>().into_diagnostic()? }
-                else { *select_key("day", puzzles)? };
-            let puzzles = puzzles.get(&day)
-                .ok_or_else( || PuzzleError::ArgumentError("day not found".to_owned(), day.to_string()) )?;
-            let part = if let Some(part) = args.next() { part.parse::<u8>().into_diagnostic()? }
-                else { *select_key("part", puzzles)? };
-            let puzzle = puzzles.get(&part)
-                .ok_or_else( || PuzzleError::ArgumentError("part not found".to_owned(), part.to_string()) )?;
-        
-            let file = if let Some(file) = args.next() { file }
-                else { default_input_file("./src/puzzles", year, day, part) };
-            let input = read_to_string(file).into_diagnostic()?;
-            let timer = Instant::now();
-            let result = puzzle.solve(&input)?;
-            let duration = timer.elapsed();
-            println!("completed in {:.2?}    result: {}", duration, result);
-        },
-        Some("list") => {
-            if let Some(year) = args.next() {
-                let year = year.parse::<u16>().into_diagnostic()?;
-                let puzzles = puzzles.get(&year)
-                    .ok_or_else( || PuzzleError::ArgumentError("year not found".to_owned(), year.to_string()) )?;
-                if let Some(day) = args.next() {
-                    if args.next().is_some() { Err(PuzzleError::ArgumentError("unexpected argument".to_owned(), day.clone()))? }
-                    let day = day.parse::<u8>().into_diagnostic()?;
-                    let puzzles = puzzles.get(&day)
-                        .ok_or_else( || PuzzleError::ArgumentError("day not found".to_owned(), day.to_string()) )?;
-                    print_keys(puzzles);
-                } else { print_keys(puzzles); }
-            } else { print_keys(&puzzles); }
-        }
-        Some(_) | None => {
-            println!("usage");
-            println!("solve <year> <day> <part> [input] -- solve a specific puzzle");
-            println!("list [year] [day] -- list all puzzles in category")
-        }
+                .ok_or_else( || PuzzleError::ArgumentError("no entries for year".to_owned(), year.to_string()))?;
+            if let Some(day) = self.day {
+                let puzzles = puzzles.get(&day)
+                    .ok_or_else( || PuzzleError::ArgumentError("no entries for year".to_owned(), day.to_string()))?;
+                print_keys(puzzles);
+            } else { print_keys(puzzles); }
+        } else { print_keys(puzzles); }
+        Ok(())
     }
-    
-    Ok(())
+}
+
+fn main() -> Result<()> {
+    let puzzles = HashMap::new().tap_mut(
+        |puzzles: &mut Puzzles|
+        {
+            for puzzle in inventory::iter::<Puzzle> {
+                puzzles.entry(puzzle.year())
+                    .or_default()
+                    .entry(puzzle.day())
+                    .or_default()
+                    .insert(puzzle.part(), puzzle);
+            }
+        });
+    Cli::parse().command.run(&puzzles)
 }
