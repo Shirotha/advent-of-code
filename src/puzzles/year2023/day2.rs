@@ -1,6 +1,7 @@
 use std::{
     borrow::Cow,
-    cmp::Ordering, ops::AddAssign
+    cmp::Ordering,
+    ops::AddAssign
 };
 use nom::{
     IResult,
