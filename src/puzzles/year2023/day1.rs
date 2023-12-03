@@ -31,7 +31,7 @@ fn word(input: &str) -> IResult<&str, u8> {
     ))(input)
 }
 
-fn sum<F>(input: &str, parser: F) -> Result<usize, PuzzleError>
+fn sum<F>(input: &str, parser: F) -> Result<u32, PuzzleError>
     where F: Send + Sync + Clone + FnMut(&str) -> IResult<&str, u8>
 {
     let digits = parse(input, lines(
@@ -39,7 +39,7 @@ fn sum<F>(input: &str, parser: F) -> Result<usize, PuzzleError>
     ))?;
     let sum = digits.into_iter()
         .map( |line: SmallVec<[u8; 4]>| Some(line.first()? * 10 + line.last()?) )
-        .fold(0, |s, n| s + n.unwrap_or(0) as usize );
+        .fold(0, |s, n| s + n.unwrap_or(0) as u32 );
     Ok(sum)
 }
 
