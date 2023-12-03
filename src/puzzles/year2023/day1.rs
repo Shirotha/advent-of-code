@@ -1,11 +1,10 @@
 use std::borrow::Cow;
 use nom::{
-    IResult, Parser,
-    bytes::complete::{tag, take_until},
-    character::complete::{anychar, line_ending},
+    IResult,
+    bytes::complete::tag,
+    character::complete::anychar,
     branch::alt,
-    multi::separated_list0,
-    combinator::{map, value, verify, all_consuming, eof},
+    combinator::{map, value, verify, eof},
 };
 use crate::{*, parse::*};
 
@@ -31,26 +30,12 @@ fn word(input: &str) -> IResult<&str, u8> {
     ))(input)
 }
 
-fn line<F>(parser: F) -> impl FnMut(&str) -> IResult<&str, Vec<u8>>
-    where F: Clone + FnMut(&str) -> IResult<&str, u8>
-{
-    move |input|
-        alt((take_until("\n"), eof))
-            .and_then(many_overlapping_till(parser.clone(), eof))
-            .parse(input)
-}
-
-fn lines<F>(parser: F) -> impl FnOnce(&str) -> IResult<&str, Vec<Vec<u8>>>
-    where F: Clone + FnMut(&str) -> IResult<&str, u8>
-{
-    |input|
-        all_consuming(separated_list0(line_ending, line(parser)))(input)
-}
-
 fn sum<F>(input: &str, parser: F) -> Result<usize, PuzzleError>
     where F: Clone + FnMut(&str) -> IResult<&str, u8>
 {
-    let digits = parse(input, lines(parser))?;
+    let digits = parse(input, lines(
+        move |input| many_overlapping_till(parser.clone(), eof)(input)
+    ))?;
     let sum = digits.into_iter()
         .map( |line| Some(line.first()? * 10 + line.last()?) )
         .fold(0, |s, n| s + n.unwrap_or(0) as usize );
