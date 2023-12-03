@@ -29,9 +29,7 @@ where
             if let Ok((_, digit)) = f.parse(input.clone()) { result.push(digit); }
             match g.parse(input.clone()) {
                 Ok(_) => return Ok((input, result)),
-                Err(_) => {
-                    (input, _) = input.take_split(1);
-                }
+                Err(_) => (input, _) = input.take_split(1)
             }
         }
     }
