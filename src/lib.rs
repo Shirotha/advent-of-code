@@ -1,6 +1,7 @@
 #![feature(iterator_try_collect)]
 
 pub mod puzzles;
+mod parse;
 
 use std::borrow::Cow;
 use thiserror::Error;
@@ -19,6 +20,7 @@ pub enum PuzzleError {
 pub type Answer<'a> = Result<Cow<'a, str>, PuzzleError>;
 pub type Solver = for <'a> fn(&'a str) -> Answer<'a>;
 
+#[inline]
 pub fn default_input_file(root: &str, year: u16, day: u8, part: u8) -> String {
     format!("{}/year{}/day{}/part{}.txt", root, year, day, part)
 }
@@ -43,11 +45,3 @@ impl Puzzle {
 }
 
 inventory::collect!(Puzzle);
-
-pub fn parse<T, F>(input: &str, parser: F) -> Result<T, PuzzleError> 
-    where F: FnOnce(&str) -> nom::IResult<&str, T>
-{
-    let (_, result) = parser(input)
-        .map_err( |err| PuzzleError::ParseError(err.to_owned()) )?;
-    Ok(result)
-}

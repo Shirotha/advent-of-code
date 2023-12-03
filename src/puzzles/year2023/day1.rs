@@ -7,7 +7,7 @@ use nom::{
     multi::separated_list0,
     combinator::{map, value, verify, all_consuming, eof},
 };
-use crate::*;
+use crate::{*, parse::*};
 
 fn digit(input: &str) -> IResult<&str, u8> {
     map(
@@ -31,30 +31,12 @@ fn word(input: &str) -> IResult<&str, u8> {
     ))(input)
 }
 
-fn many_overlapping<'a, F, G, O>(parser: F, seperator: G) -> impl FnMut(&'a str) -> IResult<&'a str, Vec<u8>>
-    where F: Clone + FnMut(&'a str) -> IResult<&'a str, u8>,
-          G: Clone + FnMut(&'a str) -> IResult<&'a str, O>
-{
-    move |mut input| {
-        let mut parser = parser.clone();
-        let mut seperator = seperator.clone();
-        let mut result = Vec::new();
-        loop {
-            if let Ok((_, digit)) = parser(input) { result.push(digit); }
-            match seperator(input) {
-                Ok((next, _)) => input = next,
-                Err(_) => return Ok((input, result))
-            }
-        }
-    }
-}
-
 fn line<F>(parser: F) -> impl FnMut(&str) -> IResult<&str, Vec<u8>>
     where F: Clone + FnMut(&str) -> IResult<&str, u8>
 {
     move |input|
         alt((take_until("\n"), eof))
-            .and_then(many_overlapping(parser.clone(), anychar))
+            .and_then(many_overlapping_till(parser.clone(), eof))
             .parse(input)
 }
 
