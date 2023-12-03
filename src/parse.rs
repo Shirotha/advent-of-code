@@ -1,9 +1,9 @@
-use itertools::Itertools;
 use nom::{
     IResult, Parser,
     error::{Error, ParseError},
     InputTake
 };
+use rayon::prelude::*;
 use crate::*;
 
 pub fn parse<'a, O, F>(input: &'a str, mut f: F) -> Result<O, PuzzleError> 
@@ -15,17 +15,16 @@ pub fn parse<'a, O, F>(input: &'a str, mut f: F) -> Result<O, PuzzleError>
 }
 
 #[inline]
-pub fn lines<'a, O, E, F>(f: F) -> impl FnMut(&'a str) -> IResult<&'a str, Vec<O>, E>
+pub fn lines<'a, O: Send, E, F>(f: F) -> impl FnMut(&'a str) -> IResult<&'a str, Vec<O>, E>
 where
-    F: Clone + Parser<&'a str, O, E>,
-    E: ParseError<&'a str>
+    F: Send + Sync + Clone + Parser<&'a str, O, E>,
+    E: Send + ParseError<&'a str>
 {
     move |input| {
-        let mut f = f.clone();
-        let x = input.lines()
-            .map( |input| f.parse(input) )
-            .map_ok( |(_, n)| n )
-            .try_collect()?;
+        let f = f.clone();
+        let x = input.par_lines()
+            .map( move |input| f.clone().parse(input).map( |(_, digit)| digit ) )
+            .collect::<Result<Vec<_>, _>>()?;
         Ok((input, x))
     }
 }

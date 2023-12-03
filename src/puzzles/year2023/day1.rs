@@ -31,7 +31,7 @@ fn word(input: &str) -> IResult<&str, u8> {
 }
 
 fn sum<F>(input: &str, parser: F) -> Result<usize, PuzzleError>
-    where F: Clone + FnMut(&str) -> IResult<&str, u8>
+    where F: Send + Sync + Clone + FnMut(&str) -> IResult<&str, u8>
 {
     let digits = parse(input, lines(
         move |input| many_overlapping_till(parser.clone(), eof)(input)

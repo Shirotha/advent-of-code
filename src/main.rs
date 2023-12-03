@@ -6,13 +6,14 @@ use std::{
     env::args
 };
 use dialoguer::{theme::ColorfulTheme, Select};
+use itertools::Itertools;
+use tap::Tap;
 use miette::{Result, IntoDiagnostic};
 use advent_of_code::{Puzzle, default_input_file, PuzzleError};
 
 fn select_key<'a, K, V>(prompt: &str, options: &'a HashMap<K, V>) -> Result<&'a K>
     where K: Display + Ord
 {
-    let mut items = options.keys().collect::<Vec<_>>();
     match options.len() {
         0 => Err(PuzzleError::ArgumentError("no valid options".to_owned(), prompt.to_owned()))?,
         1 => {
@@ -21,7 +22,8 @@ fn select_key<'a, K, V>(prompt: &str, options: &'a HashMap<K, V>) -> Result<&'a 
             Ok(key)
         },
         _ => {
-            items.sort_unstable();
+            let items = options.keys().collect_vec()
+                .tap_mut( |col| col.sort_unstable() );
             let index = Select::with_theme(&ColorfulTheme::default())
                 .with_prompt(prompt)
                 .items(&items)
@@ -36,8 +38,8 @@ fn select_key<'a, K, V>(prompt: &str, options: &'a HashMap<K, V>) -> Result<&'a 
 fn print_keys<K, V>(data: &HashMap<K, V>)
     where K: Display + Ord
 {
-    let mut items = data.keys().collect::<Vec<_>>();
-    items.sort_unstable();
+    let items = data.keys().collect_vec()
+        .tap_mut( |col| col.sort_unstable() );
     for item in items {
         println!("{}", item);
     }
