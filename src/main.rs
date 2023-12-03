@@ -1,5 +1,4 @@
 use std::{
-    error::Error,
     collections::HashMap,
     fmt::Display,
     fs::read_to_string,
@@ -7,14 +6,15 @@ use std::{
     env::args
 };
 use dialoguer::{theme::ColorfulTheme, Select};
-use advent_of_code::{Puzzle, default_input_file};
+use miette::{Result, IntoDiagnostic};
+use advent_of_code::{Puzzle, default_input_file, PuzzleError};
 
-fn select_key<'a, K, V>(prompt: &str, options: &'a HashMap<K, V>) -> Result<&'a K, Box<dyn Error>>
+fn select_key<'a, K, V>(prompt: &str, options: &'a HashMap<K, V>) -> Result<&'a K>
     where K: Display + Ord
 {
     let mut items = options.keys().collect::<Vec<_>>();
     match options.len() {
-        0 => Err("no valid options")?,
+        0 => Err(PuzzleError::ArgumentError("no valid options".to_owned(), prompt.to_owned()))?,
         1 => {
             let key = options.keys().next().unwrap();
             println!("{} {}", prompt, key);
@@ -26,7 +26,8 @@ fn select_key<'a, K, V>(prompt: &str, options: &'a HashMap<K, V>) -> Result<&'a 
                 .with_prompt(prompt)
                 .items(&items)
                 .default(items.len() - 1)
-                .interact()?;
+                .interact()
+                .into_diagnostic()?;
             Ok(items[index])
         }
     }
@@ -42,7 +43,7 @@ fn print_keys<K, V>(data: &HashMap<K, V>)
     }
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
+fn main() -> miette::Result<()> {
     let mut puzzles = HashMap::new();
     for puzzle in inventory::iter::<Puzzle> {
         puzzles.entry(puzzle.year())
@@ -54,19 +55,22 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut args = args().skip(1);
     match args.next().as_deref() {
         Some("solve") => {
-            let year = if let Some(year) = args.next() { year.parse::<u16>()? } 
+            let year = if let Some(year) = args.next() { year.parse::<u16>().into_diagnostic()? } 
                 else { *select_key("year", &puzzles)? };
-            let puzzles = puzzles.get(&year).unwrap();
-            let day = if let Some(day) = args.next() { day.parse::<u8>()? }
+            let puzzles = puzzles.get(&year)
+                .ok_or_else( || PuzzleError::ArgumentError("year not found".to_owned(), year.to_string()) )?;
+            let day = if let Some(day) = args.next() { day.parse::<u8>().into_diagnostic()? }
                 else { *select_key("day", puzzles)? };
-            let puzzles = puzzles.get(&day).unwrap();
-            let part = if let Some(part) = args.next() { part.parse::<u8>()? }
+            let puzzles = puzzles.get(&day)
+                .ok_or_else( || PuzzleError::ArgumentError("day not found".to_owned(), day.to_string()) )?;
+            let part = if let Some(part) = args.next() { part.parse::<u8>().into_diagnostic()? }
                 else { *select_key("part", puzzles)? };
-            let puzzle = puzzles.get(&part).unwrap();
+            let puzzle = puzzles.get(&part)
+                .ok_or_else( || PuzzleError::ArgumentError("part not found".to_owned(), part.to_string()) )?;
         
             let file = if let Some(file) = args.next() { file }
                 else { default_input_file("./src/puzzles", year, day, part) };
-            let input = read_to_string(file)?;
+            let input = read_to_string(file).into_diagnostic()?;
             let timer = Instant::now();
             let result = puzzle.solve(&input)?;
             let duration = timer.elapsed();
@@ -74,12 +78,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         },
         Some("list") => {
             if let Some(year) = args.next() {
-                let year = year.parse::<u16>()?;
-                let puzzles = puzzles.get(&year).unwrap();
+                let year = year.parse::<u16>().into_diagnostic()?;
+                let puzzles = puzzles.get(&year)
+                    .ok_or_else( || PuzzleError::ArgumentError("year not found".to_owned(), year.to_string()) )?;
                 if let Some(day) = args.next() {
-                    if args.next().is_some() { Err("Too many arguments")? }
-                    let day = day.parse::<u8>()?;
-                    let puzzles = puzzles.get(&day).unwrap();
+                    if args.next().is_some() { Err(PuzzleError::ArgumentError("unexpected argument".to_owned(), day.clone()))? }
+                    let day = day.parse::<u8>().into_diagnostic()?;
+                    let puzzles = puzzles.get(&day)
+                        .ok_or_else( || PuzzleError::ArgumentError("day not found".to_owned(), day.to_string()) )?;
                     print_keys(puzzles);
                 } else { print_keys(puzzles); }
             } else { print_keys(&puzzles); }

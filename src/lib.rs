@@ -2,7 +2,7 @@
 
 pub mod puzzles;
 
-use std::{borrow::Cow, error::Error};
+use std::borrow::Cow;
 use thiserror::Error;
 use miette::Diagnostic;
 
@@ -11,7 +11,9 @@ pub enum PuzzleError {
     #[error(transparent)]
     IoError(#[from] std::io::Error),
     #[error("parsing failed")]
-    ParseError(#[from] Box<dyn Error>)
+    ParseError(#[from] nom::Err<nom::error::Error<String>>),
+    #[error("bad command line argument: {1:} ({0:})")]
+    ArgumentError(String, String)
 }
 
 pub type Answer<'a> = Result<Cow<'a, str>, PuzzleError>;
@@ -46,6 +48,6 @@ pub fn parse<T, F>(input: &str, parser: F) -> Result<T, PuzzleError>
     where F: FnOnce(&str) -> nom::IResult<&str, T>
 {
     let (_, result) = parser(input)
-        .map_err( |err| PuzzleError::ParseError(err.to_owned().into()) )?;
+        .map_err( |err| PuzzleError::ParseError(err.to_owned()) )?;
     Ok(result)
 }
