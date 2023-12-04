@@ -29,13 +29,15 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum Command {
     Solve(Solve),
-    List(List)
+    List(List),
+    SolveIndirect(SolveIndirect),
 }
 impl Command {
     fn run(self, puzzles: &Puzzles) -> Result<()> {
         match self {
             Command::Solve(solve) => solve.solve(puzzles),
             Command::List(list) => list.list(puzzles),
+            Command::SolveIndirect(solve_indirect) => solve_indirect.solve(puzzles),
         }
     }
 }
@@ -48,6 +50,10 @@ struct Solve {
     input: Option<String>
 }
 impl Solve {
+    #[inline]
+    fn new(year: u16, day: u8, part: u8, input: Option<String>) -> Self {
+        Self { year, day, part, input }
+    }
     fn solve(self, puzzles: &Puzzles) -> Result<()> {
         let puzzle = puzzles.get(&self.year)
             .ok_or_else( || PuzzleError::ArgumentError("invalid year".to_owned(), self.year.to_string()))?
@@ -82,6 +88,26 @@ impl List {
             } else { print_keys(puzzles); }
         } else { print_keys(puzzles); }
         Ok(())
+    }
+}
+#[derive(Debug, Args)]
+#[command(arg_required_else_help = true)]
+struct SolveIndirect {
+    file: String
+}
+impl SolveIndirect {
+    fn solve(self, puzzles: &Puzzles) -> Result<()> {
+        read_to_string(&self.file).into_diagnostic()?
+            .split_ascii_whitespace()
+            .collect_tuple::<(&str, &str, &str)>()
+            .ok_or_else( || PuzzleError::ArgumentError("malformatted file".to_owned(), self.file) )?
+            .pipe( |(year, day, part)| {
+                Solve::new(
+                    year.parse::<u16>().into_diagnostic()?,
+                    day.parse::<u8>().into_diagnostic()?,
+                    part.parse::<u8>().into_diagnostic()?,
+                    None).solve(puzzles)
+            } )
     }
 }
 

@@ -34,6 +34,13 @@
             "command": "cargo run --release -- list ${input:pickYear} ${input:pickDay} > ${workspaceFolder}/.vscode/.parts",
             "dependsOn": ["List Years", "List Days"],
             "problemMatcher": []
+        },
+        {
+            "label": "Choose Puzzle",
+            "type": "shell",
+            "command": "echo ${input:pickYear} ${input:pickDay} ${input:pickPart} > ${workspaceFolder}/.vscode/.puzzle",
+            "dependsOn": ["List Years", "List Days", "List Parts"],
+            "problemMatcher": []
         }
     ],
     "inputs": [
