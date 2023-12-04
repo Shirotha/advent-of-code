@@ -1,7 +1,8 @@
 use nom::{
     IResult, Parser,
     error::{Error, ParseError},
-    InputTake
+    InputTake,
+    InputLength
 };
 use rayon::prelude::*;
 use smallvec::SmallVec;
@@ -41,10 +42,39 @@ where
     move |mut input| {
         let (mut f, mut g, mut result) = (f.clone(), g.clone(), SmallVec::new());
         loop {
-            if let Ok((_, digit)) = f.parse(input.clone()) { result.push(digit); }
+            if let Ok((_, item)) = f.parse(input.clone()) { result.push(item); }
             match g.parse(input.clone()) {
                 Ok(_) => return Ok((input, result)),
                 Err(_) => (input, _) = input.take_split(1)
+            }
+        }
+    }
+}
+
+#[inline]
+pub fn find_many_till<I, O1, O2, E, F, G>(f: F, g: G) -> impl FnMut(I) -> IResult<I, Vec<(usize, O1)>>
+where
+    I: Clone + InputTake + InputLength,
+    F: Clone + Parser<I, O1, E>,
+    G: Clone + Parser<I, O2, E>,
+    E: ParseError<I>,
+{
+    move |mut input| {
+        let (mut f, mut g, mut i, mut result) = (f.clone(), g.clone(), 0, Vec::new());
+        loop {
+            if let Ok((rest, item)) = f.parse(input.clone()) {
+                result.push((i, item));
+                i += input.input_len() - rest.input_len();
+                input = rest;
+            }
+            else {
+                match g.parse(input.clone()) {
+                    Ok(_) => return Ok((input, result)),
+                    Err(_) => {
+                        (input, _) = input.take_split(1);
+                        i += 1;
+                    }
+                }
             }
         }
     }
