@@ -1,12 +1,12 @@
 use std::{
     borrow::Cow,
-    ops::Add, 
+    ops::{Add, AddAssign}, 
     cmp::Ordering,
     collections::VecDeque,
-    ptr::NonNull, 
-    alloc::{alloc, Layout}
+    ptr::{read, write, NonNull}, 
+    alloc::{alloc, Layout, Global, Allocator}
 };
-use tap::Tap;
+use tap::{Tap, Pipe};
 
 use crate::{*, parse::*};
 
@@ -47,47 +47,94 @@ impl<T: PartialOrd> PartialOrd for Interval<T> {
     }
 }
 
-struct Shift<T, S> {
-    range: Interval<T>,
-    shift: S
-}
-impl<T, S> Shift<T, S> {
-    #[inline]
-    const fn new(range: Interval<T>, shift: S) -> Self {
-        Shift { range, shift }
-    }
-}
-impl<T: Copy + Ord + Add<S, Output = T>, S: Copy> Shift<T, S> {
-    #[inline]
-    fn apply(&self, value: T) -> T {
-        if self.range.contains(&value) { value.add(self.shift) } else { value }
-    }
-}
 type Ref<T, S> = NonNull<Node<T, S>>;
 type MaybeRef<T, S> = Option<Ref<T, S>>;
 enum Node<T, S> {
     Branch {
         range: Interval<T>,
-        left: MaybeRef<T, S>,
-        right: MaybeRef<T, S>
+        left: Ref<T, S>,
+        right: Ref<T, S>
     },
-    Leaf(Shift<T, S>)
+    Leaf {
+        range: Interval<T>,
+        shift: S
+    }
 }
 impl<T, S> Node<T, S> {
     const LAYOUT: Layout = Layout::new::<Node<T, S>>();
+    #[inline]
     unsafe fn alloc(value: Node<T, S>) -> Ref<T, S> {
-        let raw = alloc(Self::LAYOUT);
-        NonNull::new(raw as *mut Node<T, S>)
+        Global.allocate(Self::LAYOUT)
             .expect("valid pointer")
-            .tap_mut( |ptr| *ptr.as_mut() = value)
+            .pipe(NonNull::cast)
+            .tap_mut( |ptr| ptr.write(value) )
+    }
+    #[inline]
+    unsafe fn alloc2() -> (Ref<T, S>, Ref<T, S>) {
+        let (layout, offset) = Self::LAYOUT.repeat(2)
+            .expect("valid layout");
+        Global.allocate(layout)
+            .expect("valid pointer")
+            .pipe( |raw| (raw.cast(), raw.byte_add(offset).cast()) )
+    }
+    #[inline]
+    unsafe fn alloc4() -> (Ref<T, S>, Ref<T, S>, Ref<T, S>, Ref<T, S>) {
+        let (layout, offset) = Self::LAYOUT.repeat(4)
+            .expect("valid layout");
+        Global.allocate(layout)
+            .expect("valid pointer")
+            .pipe( |raw| (
+                raw.cast(),
+                raw.byte_add(offset).cast(),
+                raw.byte_add(offset << 1).cast(),
+                raw.byte_add(offset + (offset << 1)).cast()
+            ) )
+    }
+}
+impl<T: Copy, S> Node<T, S> {
+    unsafe fn insert_left(left_range: Interval<T>, left_shift: S, mut right_node: Ref<T, S>) {
+        if let Node::Leaf { range, shift } = read(right_node.as_ptr()) {
+            let total = Interval::new(left_range.min, range.max);
+            let (mut left, mut right) = Node::alloc2();
+            write(left.as_mut(), Node::Leaf { range: left_range, shift: left_shift });
+            write(right.as_mut(), Node::Leaf { range, shift });
+            write(right_node.as_mut(), Node::Branch { range: total, left, right });
+        } else { panic!("bad pointer!"); }
+    }
+    unsafe fn insert_right(mut left_node: Ref<T, S>, right_range: Interval<T>, right_shift: S) {
+        if let Node::Leaf { range, shift } = read(left_node.as_ptr()) {
+            let total = Interval::new(range.min, right_range.max);
+            let (mut left, mut right) = Node::alloc2();
+            write(left.as_mut(), Node::Leaf { range, shift });
+            write(right.as_mut(), Node::Leaf { range: right_range, shift: right_shift });
+            write(left_node.as_mut(), Node::Branch { range: total, left, right });
+        } else { panic!("bad pointer!"); }
+    }
+    unsafe fn build(
+        mut root: Ref<T, S>,
+        left_range: Interval<T>, left_shift: S,
+        middle_range: Interval<T>, middle_shift: S,
+        right_range: Interval<T>, right_shift: S
+    ) {
+        if let Node::Leaf { range, shift } = read(root.as_ptr()) {
+            // TODO: skip when left/right is empty (also skip help when one was skipped)
+            let (mut help, mut left, mut middle, mut right) = Self::alloc4();
+            let total = Interval::new(left_range.min, right_range.max);
+            let inter = Interval::new(left_range.min, middle_range.max);
+            write(left.as_mut(), Node::Leaf { range: left_range, shift: left_shift });
+            write(middle.as_mut(), Node::Leaf { range: middle_range, shift: middle_shift });
+            write(right.as_mut(), Node::Leaf { range: right_range, shift: right_shift });
+            write(help.as_mut(), Node::Branch { range: inter, left, right: middle });
+            write(root.as_mut(), Node::Branch { range: total, left: help, right });
+        }
     }
 }
 impl<T: Ord, S> Node<T, S> {
     #[inline]
     fn contains(&self, value: &T) -> bool {
         match self {
-            Node::Branch { range , ..} => range.contains(value),
-            Node::Leaf(shift) => shift.range.contains(value)
+            Node::Branch { range , .. } => range.contains(value),
+            Node::Leaf { range, .. } => range.contains(value)
         }
     }
 }
@@ -95,54 +142,54 @@ struct Map<T, S> {
     root: MaybeRef<T, S>,
     queue: VecDeque<Ref<T, S>>
 }
-impl<T: Ord, S> Map<T, S> {
+impl<T: Copy + Ord, S: Copy + AddAssign> Map<T, S> {
     #[inline]
     const fn new() -> Self {
         Self { root: None, queue: VecDeque::new() }
     }
-    fn insert(&mut self, value: Shift<T, S>) {
-        self.queue.clear(); // TODO: is this nessesary?
+    fn insert(&mut self, location: Interval<T>, value: S) {
         if let Some(root) = self.root {
             self.queue.push_back(root);
         } else {
-            self.root = unsafe { Some(Node::alloc(Node::Leaf(value))) };
+            self.root = unsafe { Some(Node::alloc(Node::Leaf { range: location, shift: value })) };
             return;
         }
-        // traverse tree to find all overlapping leafs
-        while let Some(current) = self.queue.pop_front() {
-            match unsafe { current.as_ref() } {
+        while let Some(mut current) = self.queue.pop_front() {
+            match unsafe { current.as_mut() } {
                 Node::Branch { range, left, right } => {
-                    if value.range.overlaps(range) {
-                        if let Some(left) = left {
-                            self.queue.push_back(*left);
-                        }
-                        if let Some(right) = right {
-                            self.queue.push_back(*right);
-                        }
+                    if location.overlaps(range) {
+                        self.queue.push_back(*left);
+                        self.queue.push_back(*right);
                     }
                 },
-                Node::Leaf(shift) => {
-                    match value.range.partial_cmp(&shift.range) {
-                        Some(Ordering::Less) => {
-                            // replace current with Branch
-                            // put old current on the right and value on the left
-                        },
-                        Some(Ordering::Equal) => {
-                            // modify shift value of current
-                        },
-                        Some(Ordering::Greater) => {
-                            // replace current with Branch
-                            // put old current on the left and value on the right
-                        },
+                Node::Leaf { range, shift } => unsafe {
+                    match location.partial_cmp(range) {
+                        Some(Ordering::Less) => Node::insert_left(location, value, current),
+                        Some(Ordering::Equal) => *shift += value,
+                        Some(Ordering::Greater) => Node::insert_right(current, location, value),
                         None => {
-                            // split current
+                            if location.min < range.min {
+                                if location.max > range.max {
+                                    // overlap center (outer)
+                                    //   split into left (value), middle (value + shift), right (value)
+                                } else {
+                                    // overlap left
+                                    //   split into left (value), middle (value + shift), right (shift)
+                                }
+                            } else if location.max > range.max {
+                                // overlap right
+                                //   split into left (shift), middle (shift + value), right (value)
+                            } else {
+                                // overlap center (inner)
+                                //   split into left (shift), middle (shift + value), right (shift)
+                            }
+                            // connect new nodes and root into current
                         }
                     }
+                    return;
                 }
             }
         }
-        // for each leaf, split and/or update shifts
-        todo!("insert shift operation into map")
     }
 }
 impl<T: Copy + Ord + Add<S, Output = T>, S: Copy> Map<T, S> {
@@ -154,23 +201,20 @@ impl<T: Copy + Ord + Add<S, Output = T>, S: Copy> Map<T, S> {
             match unsafe { current.as_ref() } {
                 Node::Branch { range, left, right } => {
                     if range.contains(&value) {
-                        if let Some(left) = left {
-                            let node = unsafe { left.as_ref() };
-                            if node.contains(&value) { current = *left; continue; }
-                        }
-                        if let Some(right) = right {
-                            let node = unsafe { right.as_ref() };
-                            if node.contains(&value) { current = *right; continue; }
-                        }
+                        let node = unsafe { left.as_ref() };
+                        if node.contains(&value) { current = *left; continue; }
+                        let node = unsafe { right.as_ref() };
+                        if node.contains(&value) { current = *right; continue; }                    
                         return value;
                     } else { break; }
                 },
-                Node::Leaf(shift) => return shift.apply(value)
+                Node::Leaf { shift, .. } => return value.add(*shift)
             }
         }
         value
     }
 }
+// TODO: clean up all nodes when Map drops
 
 pub fn part1(input: &str) -> Answer {
     todo!()

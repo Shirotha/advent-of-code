@@ -1,4 +1,7 @@
 #![feature(iterator_try_collect)]
+#![feature(non_null_convenience)]
+#![feature(allocator_api)]
+#![feature(alloc_layout_extra)]
 
 pub mod puzzles;
 mod parse;
