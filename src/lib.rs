@@ -1,5 +1,6 @@
 #![feature(iterator_try_collect)]
 
+pub mod collections;
 pub mod puzzles;
 mod parse;
 
