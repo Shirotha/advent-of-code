@@ -1,179 +1,132 @@
 use std::{
     borrow::Cow,
-    ops::Add, 
-    cmp::Ordering,
-    collections::VecDeque,
-    ptr::NonNull, 
-    alloc::{alloc, Layout}
+    ops::Add, cmp::Ordering,
 };
-use tap::Tap;
+use nom::{
+    IResult,
+    bytes::complete::tag,
+    character::complete::{char, digit1, line_ending, anychar},
+    sequence::{tuple, delimited, preceded, separated_pair},
+    combinator::map_res,
+    multi::{separated_list0, many_till, count},
+};
+use itertools::Itertools;
+use num_traits::PrimInt;
+use tap::{Tap, Pipe};
 
 use crate::{*, parse::*};
 
 #[derive(Debug)]
-struct Interval<T> {
-    min: T,
-    max: T
+struct PiecewiseLinear<T> {
+    borders: Vec<T>,
+    shift: Vec<T>,
 }
-impl<T> Interval<T> {
+impl<T> PiecewiseLinear<T> {
     #[inline]
-    const fn new(min: T, max: T) -> Self {
-        Self { min, max }
+    fn new(default: T) -> Self {
+        Self { borders: Vec::new(), shift: vec![default] }
     }
 }
-impl<T: Ord> Interval<T> {
-    #[inline]
-    fn contains(&self, value: &T) -> bool {
-        &self.min <= value && value <= &self.max
+impl<T: PrimInt> PiecewiseLinear<T> {
+    fn parse(input: &str) -> IResult<&str, Self> {
+        let (input, mut segments) = preceded(
+            many_till(anychar, line_ending), 
+            separated_list0(line_ending,
+                tuple((
+                    map_res(digit1, |number| T::from_str_radix(number, 10) ),
+                    delimited(
+                        char(' '),
+                        map_res(digit1, |number| T::from_str_radix(number, 10) ),
+                        char(' ')
+                    ),
+                    map_res(digit1, |number| T::from_str_radix(number, 10))
+                ))
+            )
+        )(input)?;
+        segments.sort_unstable_by_key( |(_, src, _)| *src );
+        let (mut borders, mut shift) = (segments.len() << 1)
+            .pipe( |n| (Vec::with_capacity(n), Vec::with_capacity(n)) );
+        shift.push(T::zero());
+        for (dst, src, len) in segments.into_iter() {
+            if borders.last().is_some_and( |last| *last == src ) { 
+                *shift.last_mut().unwrap() = dst - src;
+            } else {
+                borders.push(src);
+                shift.push(dst - src);
+            }
+            borders.push(src + len);
+            shift.push(T::zero());
+        }
+        Ok((input, Self { shift, borders }))
     }
     #[inline]
-    fn overlaps(&self, other: &Interval<T>) -> bool {
-        matches!(self.partial_cmp(other), Some(Ordering::Equal) | None)
+    fn apply(&self, value: T) -> T {
+        self.borders.partition_point( |border| *border < value)
+            .pipe( |i| value + self.shift[i] )
     }
 }
-impl<T: PartialEq> PartialEq for Interval<T> {
-    #[inline]
-    fn eq(&self, other: &Self) -> bool {
-        self.min == other.min && self.max == other.max
-    }
-}
-impl<T: Eq> Eq for Interval<T> {}
-impl<T: PartialOrd> PartialOrd for Interval<T> {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        if self.max < other.min { Some(Ordering::Less) }
-        else if self.min > other.max { Some(Ordering::Greater) }
-        else if self == other { Some(Ordering::Equal) }
-        else { None }
+impl<T: PrimInt> Add for PiecewiseLinear<T> {
+    type Output = Self;
+    fn add(self, rhs: Self) -> Self::Output {
+        let (mut borders1, mut shift1) =
+            (self.borders.into_iter().peekable(), self.shift.into_iter());
+        let (mut borders2, mut shift2) =
+            (rhs.borders.into_iter().peekable(), rhs.shift.into_iter());
+        let (mut borders, mut shift) = (shift1.len() + shift2.len())
+            .pipe( |n| (Vec::with_capacity(n), Vec::with_capacity(n)) );
+        shift.push(shift1.next().unwrap() + shift2.next().unwrap());
+        loop {
+            match (borders1.peek(), borders2.peek()) {
+                (Some(lhs), Some(rhs)) => match lhs.cmp(rhs) {
+                    Ordering::Less => {
+                        // push lhs
+                    },
+                    Ordering::Equal => {
+                        // push lhs + rhs
+                    },
+                    Ordering::Greater => {
+                        // push rhs
+                    }
+                },
+                (Some(_), None) => {
+                    // push lhs
+                },
+                (None, Some(_)) => {
+                    // push rhs
+                },
+                (None, None) => return Self { borders, shift }
+            }
+        }
     }
 }
 
-struct Shift<T, S> {
-    range: Interval<T>,
-    shift: S
+#[inline]
+fn seeds<T: PrimInt>(input: &str) -> IResult<&str, Vec<T>> {
+    preceded(tag("seeds: "), separated_list0(char(' '), 
+        map_res(digit1, |number| T::from_str_radix(number, 10))
+    ))(input)
 }
-impl<T, S> Shift<T, S> {
-    #[inline]
-    const fn new(range: Interval<T>, shift: S) -> Self {
-        Shift { range, shift }
-    }
-}
-impl<T: Copy + Ord + Add<S, Output = T>, S: Copy> Shift<T, S> {
-    #[inline]
-    fn apply(&self, value: T) -> T {
-        if self.range.contains(&value) { value.add(self.shift) } else { value }
-    }
-}
-type Ref<T, S> = NonNull<Node<T, S>>;
-type MaybeRef<T, S> = Option<Ref<T, S>>;
-enum Node<T, S> {
-    Branch {
-        range: Interval<T>,
-        left: MaybeRef<T, S>,
-        right: MaybeRef<T, S>
-    },
-    Leaf(Shift<T, S>)
-}
-impl<T, S> Node<T, S> {
-    const LAYOUT: Layout = Layout::new::<Node<T, S>>();
-    unsafe fn alloc(value: Node<T, S>) -> Ref<T, S> {
-        let raw = alloc(Self::LAYOUT);
-        NonNull::new(raw as *mut Node<T, S>)
-            .expect("valid pointer")
-            .tap_mut( |ptr| *ptr.as_mut() = value)
-    }
-}
-impl<T: Ord, S> Node<T, S> {
-    #[inline]
-    fn contains(&self, value: &T) -> bool {
-        match self {
-            Node::Branch { range , ..} => range.contains(value),
-            Node::Leaf(shift) => shift.range.contains(value)
-        }
-    }
-}
-struct Map<T, S> {
-    root: MaybeRef<T, S>,
-    queue: VecDeque<Ref<T, S>>
-}
-impl<T: Ord, S> Map<T, S> {
-    #[inline]
-    const fn new() -> Self {
-        Self { root: None, queue: VecDeque::new() }
-    }
-    fn insert(&mut self, value: Shift<T, S>) {
-        self.queue.clear(); // TODO: is this nessesary?
-        if let Some(root) = self.root {
-            self.queue.push_back(root);
-        } else {
-            self.root = unsafe { Some(Node::alloc(Node::Leaf(value))) };
-            return;
-        }
-        // traverse tree to find all overlapping leafs
-        while let Some(current) = self.queue.pop_front() {
-            match unsafe { current.as_ref() } {
-                Node::Branch { range, left, right } => {
-                    if value.range.overlaps(range) {
-                        if let Some(left) = left {
-                            self.queue.push_back(*left);
-                        }
-                        if let Some(right) = right {
-                            self.queue.push_back(*right);
-                        }
-                    }
-                },
-                Node::Leaf(shift) => {
-                    match value.range.partial_cmp(&shift.range) {
-                        Some(Ordering::Less) => {
-                            // replace current with Branch
-                            // put old current on the right and value on the left
-                        },
-                        Some(Ordering::Equal) => {
-                            // modify shift value of current
-                        },
-                        Some(Ordering::Greater) => {
-                            // replace current with Branch
-                            // put old current on the left and value on the right
-                        },
-                        None => {
-                            // split current
-                        }
-                    }
-                }
-            }
-        }
-        // for each leaf, split and/or update shifts
-        todo!("insert shift operation into map")
-    }
-}
-impl<T: Copy + Ord + Add<S, Output = T>, S: Copy> Map<T, S> {
-    fn apply(&self, value: T) -> T {
-        let mut current = 
-            if let Some(root) = self.root { root }
-            else { return value; };
-        loop {
-            match unsafe { current.as_ref() } {
-                Node::Branch { range, left, right } => {
-                    if range.contains(&value) {
-                        if let Some(left) = left {
-                            let node = unsafe { left.as_ref() };
-                            if node.contains(&value) { current = *left; continue; }
-                        }
-                        if let Some(right) = right {
-                            let node = unsafe { right.as_ref() };
-                            if node.contains(&value) { current = *right; continue; }
-                        }
-                        return value;
-                    } else { break; }
-                },
-                Node::Leaf(shift) => return shift.apply(value)
-            }
-        }
-        value
-    }
+
+#[inline]
+fn maps<T: PrimInt>(input: &str) -> IResult<&str, Vec<PiecewiseLinear<T>>> {
+    separated_list0(count(line_ending, 2), PiecewiseLinear::parse)(input)
 }
 
 pub fn part1(input: &str) -> Answer {
-    todo!()
+    parse(input, separated_pair(seeds, count(line_ending, 2), maps))?
+        .pipe( |(seeds, maps)|
+            maps.into_iter()
+                .fold(PiecewiseLinear::new(0),
+                    |acc, map| acc.add(map)
+                )
+                .pipe( |map| 
+                    seeds.into_iter()
+                        .map( |seed| map.apply(seed) )
+                        .min()
+                        .expect("non empty collection")
+                )
+        )
+        .pipe( |result: i32| Ok(Cow::Owned(result.to_string())) )
 }
 
 pub fn part2(input: &str) -> Answer {
