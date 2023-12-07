@@ -7,7 +7,7 @@ use std::{
     collections::VecDeque
 };
 use interval::*;
-use tap::{Tap, Pipe};
+use tap::{Tap, Pipe, TapOptional};
 
 #[derive(Debug)]
 enum Node<D, T> {
@@ -24,6 +24,13 @@ enum Node<D, T> {
     }
 }
 impl<D, T> Node<D, T> {
+    #[inline]
+    const fn value(&self) -> Option<&T> {
+        match self {
+            Self::Leaf { value, .. } => Some(value),
+            _ => None
+        }
+    }
     #[inline]
     const fn range(&self) -> &Interval<D> {
         match self {
@@ -79,6 +86,15 @@ impl<D: Default, T: Default> Default for Node<D, T> {
         Self::Leaf { range: Interval::default(), value: T::default(), prev: None, next: None }
     }
 }
+
+#[derive(Debug)]
+enum Relative {
+    Left(usize),
+    Center(usize),
+    Right(usize),
+    None
+}
+
 /*
  * interface
  * 
@@ -88,33 +104,98 @@ impl<D: Default, T: Default> Default for Node<D, T> {
  *   iterate all segments in order
  *   => have to store all leaves in order
  * 
- *   range entry
- *     modify with f(existing) -> new callback
+ *   range operations
  *     iterate over all segments in range
+ *     modify with <f(existing (None for no previous value)) -> new> callback
+ *     => fragment left/right side + [fill holes + modify existing -> replace subtree]
+ *     overwrite whole range with new value
+ *     => delete sub-tree
  * 
  */
 #[derive(Debug)]
 pub struct RangeMap<D, T> {
     nodes: Vec<Node<D, T>>,
-    first: usize,
-    last: usize,
+    first: Option<usize>,
+    last: Option<usize>,
     queue: VecDeque<usize>
 }
 impl<D, T> RangeMap<D, T> {
     #[inline]
     fn iter(&self) -> Iter<D, T> {
-        Iter { nodes: &self.nodes, next: Some(self.first) }
+        Iter { nodes: &self.nodes, next: self.first }
+    }
+    #[inline]
+    const fn is_empty(&self) -> bool {
+        self.first.is_none()
     }
 }
-impl<D: Default, T: Default> RangeMap<D, T> {
+impl<D: Ord, T> RangeMap<D, T> {
+    fn binary_search(&self, position: &D) -> Result<usize, Relative> {
+        if self.is_empty() { return Err(Relative::None); }
+        let mut current = 0;
+        loop {
+            match &self.nodes[current] {
+                Node::Branch { range, left, right } => match range.compare(position) {
+                    Ordering::Less => return Err(Relative::Left(current)),
+                    Ordering::Equal => if self.nodes[*left].range().contains(position) {
+                            current = *left;
+                        } else if self.nodes[*right].range().contains(position) {
+                            current = *right;
+                        } else { return Err(Relative::Center(current)) },
+                    Ordering::Greater => return Err(Relative::Right(current))
+                },
+                Node::Leaf { range, .. } =>
+                    return match range.compare(position) {
+                        Ordering::Less => Err(Relative::Left(current)),
+                        Ordering::Equal => Ok(current),
+                        Ordering::Greater => Err(Relative::Right(current))
+                    }
+            }
+        }
+    }
     #[inline]
-    fn new() -> Self {
-        Self { nodes: vec![Node::default()], queue: VecDeque::new(), first: 0, last: 0 }
+    pub fn get(&self, position: &D) -> Option<&T> {
+        self.binary_search(position).ok()
+            .map( |i| unsafe { self.nodes[i].value().unwrap_unchecked() } )
+    }
+    /*
+     * (pre) [ (left) | first ] 0 [ 1 ] 2 [ 3 ] ... [ last | (right) ] (post)
+     * starting point <=> min of <first>
+     *   less: <pre> is first element
+     *   equal: <first> is first element
+     *   greater: first element is <first> without <left>
+     * end point <=> max of <last>
+     *   less: last element is <last> without <right>
+     *   equal: <last> is last element
+     *   greater: <post> is last element
+     * 
+     * call f(some) for existing intervals
+     * call f(none) for holes
+     * return some to set value
+     * return none to delete segment
+     * 
+     * for interval + hole pair:
+     *   2 some => call replace_subtree with both values on interval
+     *   1 some => set interval to new value (and update range if hole)
+     *   => should not allocate additional memory
+     *   0 some => delete interval (set parent of interval to its other child)
+     *   => should be able to use |_| None to delete region
+     */
+    pub fn modify<F>(&mut self, location: Interval<D>, f: F)
+        where F: FnMut(Option<&T>) -> Option<T>
+    {
+        todo!()
+    }
+}
+impl<D, T> RangeMap<D, T> {
+    #[inline]
+    const fn new() -> Self {
+        Self { nodes: Vec::new(), queue: VecDeque::new(), first: None, last: None }
     }
 }
 impl<D: Clone + Default, T: Default> RangeMap<D, T> {
     fn from_iter<I: ExactSizeIterator<Item = (Interval<D>, T)>>(leaves: I) -> Self {
-        Self::new()
+        Self { nodes: vec![Node::default()], queue: VecDeque::new(), first: Some(0), last: Some(0) }
             .tap_mut( |this| this.replace_with_subtree(0, leaves) )
     }
 }
@@ -154,9 +235,13 @@ impl<D: Clone, T> RangeMap<D, T> {
         unsafe {
             if let Some(prev) = prev {
                 *self.nodes[prev].next_mut().unwrap_unchecked() = Some(current);
+            } else {
+                self.first = Some(current);
             }
             if let Some(next) = next {
                 *self.nodes[next].prev_mut().unwrap_unchecked() = Some(self.nodes.len() - 1);
+            } else {
+                self.last = Some(self.nodes.len() - 1);
             }
             *self.nodes[current].prev_mut().unwrap_unchecked() = prev;
             *self.nodes.last_mut().unwrap_unchecked().prev_mut().unwrap_unchecked() = next;
@@ -222,7 +307,7 @@ impl<'a, D, T> IntoIterator for &'a RangeMap<D, T> {
     type IntoIter = Iter<'a, D, T>;
     type Item = <Self::IntoIter as Iterator>::Item;
     fn into_iter(self) -> Self::IntoIter {
-        Iter { nodes: &self.nodes, next: Some(self.first) }
+        Iter { nodes: &self.nodes, next: self.first }
     }
 }
 
@@ -246,6 +331,21 @@ impl<D: Default, T: Default> IntoIterator for RangeMap<D, T> {
     type IntoIter = IntoIter<D, T>;
     type Item = <Self::IntoIter as Iterator>::Item;
     fn into_iter(self) -> Self::IntoIter {
-        IntoIter { nodes: self.nodes, next: Some(self.first) }
+        IntoIter { nodes: self.nodes, next: self.first }
+    }
+}
+
+struct IterHelper<'a, D, T> {
+    nodes: &'a [Node<D, T>],
+    next: Option<usize>,
+    end: Option<usize>
+}
+impl<'a, D, T> Iterator for IterHelper<'a, D, T> {
+    type Item = usize;
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.next == self.end { return None; }
+        self.next.tap_some( |i| unsafe {
+                self.next = *self.nodes[*i].next().unwrap_unchecked();
+            } )
     }
 }

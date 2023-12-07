@@ -1,5 +1,6 @@
 use std::{
     cmp::Ordering,
+    ops::Range,
     mem::transmute
 };
 
@@ -24,6 +25,7 @@ use smallvec::SmallVec;
  *       {     B     }         Equal                             x                                x                      x        x
  * (  A  [     B     ]  A  )   Outer                     x                                                    x          x        x
  */
+#[allow(clippy::enum_variant_names)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Overlap {
@@ -96,6 +98,12 @@ impl<T: Ord> Interval<T> {
     #[inline]
     pub fn contains(&self, value: &T) -> bool {
         &self.min <= value && value < &self.max
+    }
+    #[inline]
+    pub fn compare(&self, value: &T) -> Ordering {
+        if value < &self.min { Ordering::Less }
+        else if value >= &self.max { Ordering::Greater }
+        else { Ordering::Equal }
     }
     #[inline]
     pub fn overlap(&self, other: &Self) -> Overlap {
@@ -204,6 +212,18 @@ impl<T: Ord> PartialOrd for Interval<T> {
         else if self.min >= other.max { Some(Ordering::Greater) }
         else if self == other { Some(Ordering::Equal) }
         else { None }
+    }
+}
+impl<T> From<Range<T>> for Interval<T> {
+    #[inline]
+    fn from(value: Range<T>) -> Self {
+        Self::new(value.start, value.end)
+    }
+}
+impl<T> From<Interval<T>> for Range<T> {
+    #[inline]
+    fn from(value: Interval<T>) -> Self {
+        value.min..value.max
     }
 }
 
