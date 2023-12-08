@@ -71,7 +71,7 @@ mod test {
     "};
     const OUTPUT1: &str = "142";
 
-    const INPUT2: &str = indoc!{"
+    const INPUT2: &str = indoc! {"
         two1nine
         eightwothree
         abcone2threexyz

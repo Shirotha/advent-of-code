@@ -22,7 +22,7 @@ mod test {
     "};
     const OUTPUT1: &str = "";
 
-    const INPUT2: &str = indoc!{"
+    const INPUT2: &str = indoc! {"
     
     "};
     const OUTPUT2: &str = "";
