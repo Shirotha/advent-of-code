@@ -1,7 +1,4 @@
-use std::{
-    borrow::Cow,
-    ops::Add, cmp::Ordering,
-};
+use std::borrow::Cow;
 use nom::{
     IResult,
     bytes::complete::tag,
@@ -10,7 +7,6 @@ use nom::{
     combinator::map_res,
     multi::{separated_list0, many_till, count},
 };
-use itertools::Itertools;
 use num_traits::PrimInt;
 use tap::{Tap, Pipe};
 
@@ -64,38 +60,43 @@ impl<T: PrimInt> PiecewiseLinear<T> {
         self.borders.partition_point( |border| *border < value)
             .pipe( |i| value + self.shift[i] )
     }
-}
-impl<T: PrimInt> Add for PiecewiseLinear<T> {
-    type Output = Self;
-    fn add(self, rhs: Self) -> Self::Output {
-        let (mut borders1, mut shift1) =
-            (self.borders.into_iter().peekable(), self.shift.into_iter());
-        let (mut borders2, mut shift2) =
-            (rhs.borders.into_iter().peekable(), rhs.shift.into_iter());
-        let (mut borders, mut shift) = (shift1.len() + shift2.len())
+    fn contract(mut self, mut other: Self) -> Self {
+        if self.borders.is_empty() {
+            let default = self.shift[0];
+            other.shift.iter_mut().for_each( |shift| *shift = *shift + default );
+            return other;
+        } else if other.borders.is_empty() {
+            let default = other.shift[0];
+            self.shift.iter_mut().for_each( |shift| *shift = *shift + default );
+            return self;
+        }
+        let (mut borders, mut shift) = (self.shift.len() + other.shift.len())
             .pipe( |n| (Vec::with_capacity(n), Vec::with_capacity(n)) );
-        shift.push(shift1.next().unwrap() + shift2.next().unwrap());
+        shift.push(self.shift[0] + other.shift[0]);
+        let first = self.borders[0];
+        for (border, value) in other.borders.iter()
+            .zip(other.shift.iter().skip(1))
+            .take_while( |(border, _)| **border < first)
+        {
+            borders.push(*border);
+            shift.push(*value);
+        }
+        let (mut i, mut carry) = (0, None);
         loop {
-            match (borders1.peek(), borders2.peek()) {
-                (Some(lhs), Some(rhs)) => match lhs.cmp(rhs) {
-                    Ordering::Less => {
-                        // push lhs
-                    },
-                    Ordering::Equal => {
-                        // push lhs + rhs
-                    },
-                    Ordering::Greater => {
-                        // push rhs
-                    }
-                },
-                (Some(_), None) => {
-                    // push lhs
-                },
-                (None, Some(_)) => {
-                    // push rhs
-                },
+            let border = match (self.borders.get(i), carry) {
+                (Some(&a), Some(b)) =>
+                    if a <= b { i += 1; a } else { b },
+                (Some(&a), None) => { i += 1; a },
+                (None, Some(b)) => b,
                 (None, None) => return Self { borders, shift }
-            }
+            };
+            borders.push(border);
+            shift.push(
+                other.borders
+                    .partition_point( |other| *other <= border )
+                    .tap ( |j| carry = other.borders.get(*j).copied() )
+                    .pipe( |j| self.shift[i] + other.shift[j] )
+            )
         }
     }
 }
@@ -117,7 +118,7 @@ pub fn part1(input: &str) -> Answer {
         .pipe( |(seeds, maps)|
             maps.into_iter()
                 .fold(PiecewiseLinear::new(0),
-                    |acc, map| acc.add(map)
+                    |acc, map| acc.contract(map)
                 )
                 .pipe( |map| 
                     seeds.into_iter()
@@ -176,7 +177,7 @@ mod test {
         60 56 37
         56 93 4
     "};
-    const OUTPUT1: &str = "";
+    const OUTPUT1: &str = "35";
 
     const INPUT2: &str = indoc!{"
     
