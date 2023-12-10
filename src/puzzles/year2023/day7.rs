@@ -108,6 +108,7 @@ impl<const N: usize> Hand<N> {
             points[n] = 1;
             n += 1;
         }
+        if jokers != N && best_p == 0 { best_p = 1; }
         points[best_i] = (1 << jokers) * (best_p + 1) - 1;
         Ok((input, Self { cards, value: points.into_iter().sum() }))
     }
@@ -145,7 +146,7 @@ pub fn part1(input: &str) -> Answer {
         .sum::<u32>()
         .pipe( |result| Ok(Cow::Owned(result.to_string())) )
 }
-// FIXME: 247830982 too low
+
 pub fn part2(input: &str) -> Answer {
     const N: usize = 5;
     parse(input, lines( |input|
