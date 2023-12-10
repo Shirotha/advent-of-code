@@ -17,7 +17,7 @@ use tap::Pipe;
 
 use crate::{*, parse::*};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct PiecewiseLinear<T> {
     borders: Vec<T>,
     shift: Vec<T>,
@@ -62,7 +62,7 @@ impl<T: PrimInt> PiecewiseLinear<T> {
     }
     #[inline]
     fn apply(&self, value: T) -> T {
-        self.borders.partition_point( |border| *border < value)
+        self.borders.partition_point( |border| *border <= value)
             .pipe( |i| value + self.shift[i] )
     }
     #[inline]
@@ -108,7 +108,7 @@ impl<'a, T: PrimInt> Iterator for Iter<'a, T> {
             }
         } else {
             let i = self.pl.borders
-                .partition_point( |border| *border < self.range.start );
+                .partition_point( |border| *border <= self.range.start );
             if i == self.pl.borders.len() || self.pl.borders[i] >= self.range.end {
                 self.position = Some((true, i));
                 Some((self.range.clone(), self.pl.shift[i]))
@@ -154,7 +154,7 @@ pub fn part2(input: &str) -> Answer {
                 .pipe( |map|
                     seeds.into_iter()
                         .tuples()
-                        .flat_map( |(start, end)| map.range(start..end) )
+                        .flat_map( |(start, len)| map.range(start..(start + len)) )
                         .map( |(range, value)| range.start + value )
                         .min().unwrap()
                 )
@@ -270,6 +270,33 @@ mod test {
                         } else { None }
                     } )).collect_vec()
                 ).collect_vec()
+        );
+        assert_eq!(locations, vec![
+            vec![79, 81, 81, 81, 74, 78, 78, 82],
+            vec![14, 14, 53, 49, 42, 42, 43, 43],
+            vec![55, 57, 57, 53, 46, 82, 82, 86],
+            vec![13, 13, 52, 41, 34, 34, 35, 35],
+            vec![82, 84, 84, 84, 77, 45, 46, 46]
+        ])
+    }
+
+    #[test]
+    fn apply_contract() {
+        let locations = parse(INPUT1, separated_pair(seeds::<i64>, count(line_ending, 2), maps))
+        .unwrap()
+        .pipe( |(seeds, maps)|
+            once(seeds.clone()).chain(unfold((0, PiecewiseLinear::new(0)), |(i, map)| {
+                if let Some(next) = maps.get(*i) {
+                    *map = map.clone().contract(next.clone());
+                    *i += 1;
+                    Some(seeds.iter().map( |seed| map.apply(*seed) ).collect_vec())
+                } else { None }
+            } )).collect_vec()
+                .pipe( |result| 
+                    (0..result[0].len()).map( |i|
+                        result.iter().map( |layer| layer[i] ).collect_vec()
+                    ).collect_vec()
+                )
         );
         assert_eq!(locations, vec![
             vec![79, 81, 81, 81, 74, 78, 78, 82],
