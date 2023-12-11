@@ -9,6 +9,7 @@ authors = ["Shirotha"]
 [dependencies]
 #dialoguer = { version = "0.11.0", features = [] }
 inventory = "0.3.13"
+ndarray = { version = "0.15.6", features = ["std", "rayon"] }
 indoc = "2.0.4"
 miette = { version = "5.10.0", features = ["fancy"] }
 thiserror = "1.0.50"
@@ -19,7 +20,7 @@ smallvec = { version = "1.11.2", features = ["union", "const_generics", "const_n
 tap = "1.0.1"
 rayon = "1.8.0"
 num = "0.4.1"
-glam = { version = "0.24.2", features = ["std", "approx", "core-simd", "debug-glam-assert"] }
+glam = { version = "0.24.2", features = ["std", "core-simd", "debug-glam-assert"] }
 num-traits = "0.2.17"
 clap = { version = "4.4.10", features = ["derive"] }
 

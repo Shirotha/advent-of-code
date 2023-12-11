@@ -1,6 +1,7 @@
 #![feature(iterator_try_collect)]
 #![feature(float_next_up_down)]
 #![feature(portable_simd)]
+#![feature(const_option)]
 
 pub mod puzzles;
 mod parse;
