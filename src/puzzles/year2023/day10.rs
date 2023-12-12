@@ -1,7 +1,10 @@
 use std::{
     borrow::Cow,
-    mem::transmute
+    cmp::{Ordering, minmax},
+    collections::{LinkedList, linked_list::CursorMut},
+    mem::transmute,
 };
+use itertools::Itertools;
 use ndarray::prelude::*;
 use nom::IResult;
 use tap::Pipe as TapPipe;
@@ -24,6 +27,50 @@ impl Dir {
     #[inline]
     const fn reverse(&self) -> Self {
         self.rotate_left(2)
+    }
+}
+
+type Pos = (usize, usize);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+enum Orient {
+    Right    = 0x04,
+    Straight = 0x10,
+    Left     = 0x40
+}
+impl Orient {
+    #[inline]
+    const fn sign(&self) -> i16 {
+        match self {
+            Self::Right => -1,
+            Self::Straight => 0,
+            Self::Left => 1,
+        }
+    }
+    #[inline]
+    fn from_corners(corners: &[Pos]) -> Self {
+        let (a, b, c) = (&corners[0], &corners[1], &corners[2]);
+        let cmp = if a.0 == b.0 {
+            match a.1.cmp(&b.1) {
+                Ordering::Less => c.0.cmp(&b.0),
+                Ordering::Equal => panic!(),
+                Ordering::Greater => b.0.cmp(&c.0)
+            }
+        } else if a.1 == b.1 {
+            match a.0.cmp(&b.0) {
+                Ordering::Less => c.1.cmp(&b.1),
+                Ordering::Equal => panic!(),
+                Ordering::Greater => b.1.cmp(&c.1)
+            }
+        } else {
+            panic!()
+        };
+        match cmp {
+            Ordering::Less => Self::Left,
+            Ordering::Equal => panic!(),
+            Ordering::Greater => Self::Right
+        }
     }
 }
 
@@ -74,10 +121,18 @@ impl Pipe {
     const fn has_dir(&self, dir: Dir) -> bool {
         (*self as u8) & (dir as u8) != 0
     }
+    #[inline]
+    const fn orient(&self, dir: Dir) -> Orient {
+        let from = dir.reverse() as u8;
+        let dirs = (*self as u8) & 0x55;
+        if dirs & from == 0 { panic!(); }
+        let to = dirs.rotate_right(from.trailing_zeros()) & 0x15;
+        unsafe { transmute(to) }
+    }
 }
 
 #[inline]
-const fn move_towards(mut pos: (usize, usize), dir: Dir) -> (usize, usize) {
+const fn move_towards(mut pos: Pos, dir: Dir) -> Pos {
     match dir {
         Dir::E => pos.1 += 1,
         Dir::N => pos.0 -= 1,
@@ -87,17 +142,17 @@ const fn move_towards(mut pos: (usize, usize), dir: Dir) -> (usize, usize) {
     pos
 }
 
-type Move = ((usize, usize), Dir);
+type Move = (Pos, Dir);
 
 #[derive(Debug)]
 struct Walker<'a> {
     data: &'a Array2<Pipe>,
-    pos: (usize, usize),
+    pos: Pos,
     last: Dir
 }
 impl<'a> Walker<'a> {
     #[inline]
-    fn new(data: &'a Array2<Pipe>, pos: (usize, usize), towards: Dir) -> Self {
+    fn new(data: &'a Array2<Pipe>, pos: Pos, towards: Dir) -> Self {
         Walker { data, pos, last: data[pos].other_dir(towards).reverse() }
     }
 }
@@ -116,6 +171,42 @@ impl Iterator for Walker<'_> {
 #[inline]
 fn has_crossed(a: &Move, b: &Move) -> bool {
     a.0 == b.0 || a.0 == move_towards(b.0, a.1)
+}
+
+type Corner = (Pos, Orient);
+
+#[derive(Debug)]
+struct Corners<'a> {
+    walker: Walker<'a>,
+    first: Option<Pos>
+}
+impl<'a> Corners<'a> {
+    #[inline]
+    fn new(data: &'a Array2<Pipe>, pos: Pos, towards: Dir) -> Self {
+        Corners { walker: Walker::new(data, pos, towards), first: None }
+    }
+}
+impl Iterator for Corners<'_> {
+    type Item = Corner;
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        while let Some((pos, dir)) = self.walker.next() {
+            let orient = self.walker.data[pos].orient(dir);
+            match orient {
+                Orient::Right | Orient:: Left => {
+                    if let Some(first) = self.first {
+                        return if pos == first { None }
+                            else { Some((pos, orient)) };
+                    } else {
+                        self.first = Some(pos);
+                        return Some((pos, orient));
+                    }
+                },
+                Orient::Straight => continue
+            }
+        }
+        None
+    }
 }
 
 fn grid(input: &str) -> IResult<&str, (Array2<Pipe>, (usize, usize))> {
@@ -156,7 +247,7 @@ fn grid(input: &str) -> IResult<&str, (Array2<Pipe>, (usize, usize))> {
 }
 
 #[inline]
-fn can_move(data: &Array2<Pipe>, from: (usize, usize), dir: Dir) -> bool {
+fn can_move(data: &Array2<Pipe>, from: Pos, dir: Dir) -> bool {
     let (h, w) = data.dim();
     match dir {
         Dir::E => from.1 != w - 1,
@@ -167,7 +258,7 @@ fn can_move(data: &Array2<Pipe>, from: (usize, usize), dir: Dir) -> bool {
 }
 
 #[inline]
-fn patch(data: &mut Array2<Pipe>, at: (usize, usize)) -> Pipe {
+fn patch(data: &mut Array2<Pipe>, at:Pos) -> Pipe {
     let side = |dir|
         if can_move(data, at, dir)
             && data[move_towards(at, dir)].has_dir(dir.reverse()) 
@@ -177,6 +268,152 @@ fn patch(data: &mut Array2<Pipe>, at: (usize, usize)) -> Pipe {
     let pipe = unsafe { transmute(dirs) };
     data[at] = pipe;
     pipe
+}
+
+struct Quad {
+    topleft: Pos,
+    size: Pos
+}
+impl Quad {
+    #[inline]
+    fn from_corners(corners: &[Pos; 4]) -> Quad {
+        let ([xmin, xmax], [ymin, ymax]) = if corners[0].0 == corners[1].0 {
+            (
+                minmax(corners[0].0, corners[2].0),
+                minmax(corners[0].1, corners[1].1)
+            )
+        } else if corners[0].1 == corners[1].1 {
+            (
+                minmax(corners[0].0, corners[1].0),
+                minmax(corners[0].1, corners[2].1)
+            )
+        } else {
+            panic!()
+        };
+        Quad { topleft: (xmin, ymin), size: (xmax - xmin, ymax - ymin) }
+    }
+}
+
+fn quadrangulate(corners: Vec<(usize, usize)>) -> Vec<Quad> {
+    /*
+     * replace bends with shortcuts, add removed corners as quads to result
+     * 
+     * Case A: four corners building a Quad, orientation RLLR  
+     * 
+     *   F---J        |
+     *   |        ->  |
+     *   L---7        |
+     * 
+     * Case B1: need new corner at the end, orientation RLL?
+     * 
+     *   F---J        |
+     *   |        ->  |
+     *   L-------     L---
+     * 
+     * Case B2: need new corner at the eginning, orientation ?LLR
+     * 
+     *   F-------     F---
+     *   |        ->  |
+     *   L---7        |
+     * 
+     * resulting shape should represent inner shape (top/left border coordinates + 1)
+     */
+    const PATTERN: [Orient; 4] = [Orient::Right, Orient::Left, Orient::Left, Orient::Right];
+
+    #[inline]
+    fn move_next(
+        buffer: &mut [Pos; 4],
+        orients: &mut [Orient; 4],
+        cursor: &mut CursorMut<Pos>
+    ) {
+        let next = if let Some(next) = cursor.current() {
+            *next
+        } else {
+            cursor.move_next();
+            *cursor.current().unwrap()
+        };
+        *buffer = [buffer[1], buffer[2], buffer[3], next];
+        *orients = [orients[1], orients[2], orients[3], Orient::from_corners(&buffer[1..])];
+    } 
+    #[inline]
+    fn remove_before(cursor: &mut CursorMut<Pos>, n: u8) {
+        for _ in 0..n {
+            cursor.move_prev();
+            cursor.remove_current();
+        }
+    }
+    #[inline]
+    const fn distance(a: Pos, b: Pos) -> usize {
+        a.0.abs_diff(b.0) + a.1.abs_diff(b.1)
+    }
+    #[inline]
+    fn lerp(a: Pos, b: Pos, d: usize) -> Pos {
+        if a.0 == b.0 {
+            match a.1.cmp(&b.1) {
+                Ordering::Less => (a.0, a.1 + d),
+                Ordering::Equal => panic!(),
+                Ordering::Greater => (b.0, b.1 + d)
+            }
+        } else if a.1 == b.1 {
+            match a.0.cmp(&b.0) {
+                Ordering::Less => (a.0 + d, a.1),
+                Ordering::Equal => panic!(),
+                Ordering::Greater => (b.0 + d, b.1)
+            }
+        } else {
+            panic!();
+        }
+    }
+
+    let mut len = corners.len();
+    let mut quads = Vec::new();
+    let mut corners = LinkedList::from_iter(corners);
+    let mut cursor = corners.cursor_front_mut();
+    let mut buffer = [(0, 0); 4];
+    for corner in &mut buffer[1..] {
+        *corner = *cursor.current().unwrap();
+        cursor.move_next();
+    }
+    let mut orients = [Orient::Straight; 4];
+    orients[3] = Orient::from_corners(&buffer[1..]);
+    for _ in 0..3 {
+        move_next(&mut buffer, &mut orients, &mut cursor);
+    }
+    while len != 4 {
+        move_next(&mut buffer, &mut orients, &mut cursor);
+        // ... -> buffer[0] -> ... -> *buffer[3]* -> ...
+        let a = distance(buffer[0], buffer[1]);
+        let b = distance(buffer[2], buffer[3]);
+        match a.cmp(&b) {
+            Ordering::Equal if orients == PATTERN => {
+                // Case A
+                quads.push(Quad::from_corners(&buffer));
+                cursor.remove_current();
+                remove_before(&mut cursor, 3);
+                len -= 4;
+            },
+            Ordering::Less if orients[..3] == PATTERN[..3] => {
+                // Case B1
+                buffer[3] = lerp(buffer[2], buffer[3], a);
+                quads.push(Quad::from_corners(&buffer));
+                cursor.insert_before(buffer[3]);
+                cursor.move_prev();
+                remove_before(&mut cursor, 3);
+                len -= 2;
+            },
+            Ordering::Greater if orients[1..] == PATTERN[1..] => {
+                // Case B2
+                buffer[0] = lerp(buffer[0], buffer[1], b);
+                quads.push(Quad::from_corners(&buffer));
+                cursor.remove_current();
+                remove_before(&mut cursor, 2);
+                cursor.insert_before(buffer[0]);
+                len -= 2;
+            }
+            _ => ()
+        }
+    }
+    quads
 }
 
 pub fn part1(input: &str) -> Answer {
@@ -192,7 +429,22 @@ pub fn part1(input: &str) -> Answer {
 }
 
 pub fn part2(input: &str) -> Answer {
-    todo!()
+    parse(input, grid)?
+        .pipe( |(mut grid, start)| {
+            let (dir, _) = patch(&mut grid, start).dirs().unwrap();
+            let mut sum = 0;
+            let mut corners = Corners::new(&grid, start, dir)
+                .map( |(pos, orient)| {
+                    sum += orient.sign();
+                    pos
+                } )
+                .collect_vec();
+            if sum.is_negative() {
+                corners.reverse();
+            }
+            1
+        } )
+        .pipe( |result| Ok(Cow::Owned(result.to_string())) )
 }
 
 inventory::submit! { Puzzle::new(2023, 10, 1, part1) }

@@ -2,6 +2,8 @@
 #![feature(float_next_up_down)]
 #![feature(portable_simd)]
 #![feature(const_option)]
+#![feature(cmp_minmax)]
+#![feature(linked_list_cursors)]
 
 pub mod puzzles;
 mod parse;
