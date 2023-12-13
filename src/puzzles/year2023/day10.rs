@@ -35,9 +35,9 @@ type Pos = (usize, usize);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 enum Orient {
-    Right    = 0x04,
-    Straight = 0x10,
-    Left     = 0x40
+    Right    = 0x01,
+    Straight = 0x04,
+    Left     = 0x10
 }
 impl Orient {
     #[inline]
@@ -67,9 +67,9 @@ impl Orient {
             panic!()
         };
         match cmp {
-            Ordering::Less => Self::Left,
+            Ordering::Less => Self::Right,
             Ordering::Equal => panic!(),
-            Ordering::Greater => Self::Right
+            Ordering::Greater => Self::Left
         }
     }
 }
@@ -126,7 +126,7 @@ impl Pipe {
         let from = dir.reverse() as u8;
         let dirs = (*self as u8) & 0x55;
         if dirs & from == 0 { panic!(); }
-        let to = dirs.rotate_right(from.trailing_zeros()) & 0x15;
+        let to = dirs.rotate_right(from.trailing_zeros() + 2) & 0x15;
         unsafe { transmute(to) }
     }
 }
@@ -271,7 +271,7 @@ fn patch(data: &mut Array2<Pipe>, at:Pos) -> Pipe {
 }
 
 struct Quad {
-    topleft: Pos,
+    // topleft: Pos,
     size: Pos
 }
 impl Quad {
@@ -290,55 +290,40 @@ impl Quad {
         } else {
             panic!()
         };
-        Quad { topleft: (xmin, ymin), size: (xmax - xmin, ymax - ymin) }
+        Quad { /* topleft: (xmin, ymin), */ size: (xmax - xmin, ymax - ymin) }
+    }
+    #[inline]
+    const fn area(&self) -> usize {
+        self.size.0 * self.size.1
     }
 }
 
-fn quadrangulate(corners: Vec<(usize, usize)>) -> Vec<Quad> {
-    /*
-     * replace bends with shortcuts, add removed corners as quads to result
-     * 
-     * Case A: four corners building a Quad, orientation RLLR  
-     * 
-     *   F---J        |
-     *   |        ->  |
-     *   L---7        |
-     * 
-     * Case B1: need new corner at the end, orientation RLL?
-     * 
-     *   F---J        |
-     *   |        ->  |
-     *   L-------     L---
-     * 
-     * Case B2: need new corner at the eginning, orientation ?LLR
-     * 
-     *   F-------     F---
-     *   |        ->  |
-     *   L---7        |
-     * 
-     * resulting shape should represent inner shape (top/left border coordinates + 1)
-     */
+fn quadrangulate(mut corners: Vec<(usize, usize)>) -> Vec<Quad> {
+    // ASSERT: corners are positively oriented
+    // NOTE: positions will be treated as top-left of the tile
+    // NOTE: returns inner shape (without borders)
     const PATTERN: [Orient; 4] = [Orient::Right, Orient::Left, Orient::Left, Orient::Right];
 
     #[inline]
-    fn move_next(
-        buffer: &mut [Pos; 4],
-        orients: &mut [Orient; 4],
-        cursor: &mut CursorMut<Pos>
-    ) {
-        let next = if let Some(next) = cursor.current() {
-            *next
-        } else {
+    fn next<'a>(cursor: &'a mut CursorMut<Pos>) -> &'a mut Pos {
+        cursor.move_next();
+        if cursor.current().is_none() {
             cursor.move_next();
-            *cursor.current().unwrap()
-        };
-        *buffer = [buffer[1], buffer[2], buffer[3], next];
-        *orients = [orients[1], orients[2], orients[3], Orient::from_corners(&buffer[1..])];
-    } 
+        } 
+        cursor.current().unwrap()
+    }
+    #[inline]
+    fn prev<'a>(cursor: &'a mut CursorMut<Pos>) -> &'a mut Pos {
+        cursor.move_prev();
+        if cursor.current().is_none() {
+            cursor.move_prev();
+        }
+        cursor.current().unwrap()
+    }
     #[inline]
     fn remove_before(cursor: &mut CursorMut<Pos>, n: u8) {
         for _ in 0..n {
-            cursor.move_prev();
+            prev(cursor);
             cursor.remove_current();
         }
     }
@@ -364,51 +349,154 @@ fn quadrangulate(corners: Vec<(usize, usize)>) -> Vec<Quad> {
             panic!();
         }
     }
+    #[inline]
+    fn update_next(
+        buffer: &mut [Pos; 4],
+        orients: &mut [Orient; 4],
+        cursor: &mut CursorMut<Pos>
+    ) {
+        let next = *next(cursor);
+        *buffer = [buffer[1], buffer[2], buffer[3], next];
+        *orients = [orients[1], orients[2], orients[3], Orient::from_corners(&buffer[1..])];
+    } 
+    #[inline]
+    fn init_here(
+        buffer: &mut [Pos; 4],
+        orients: &mut [Orient; 4],
+        cursor: &mut CursorMut<Pos>
+    ) {
+        for corner in &mut buffer[1..] {
+            *corner = *next(cursor);
+        }
+        dbg!(&buffer);
+        orients[3] = Orient::from_corners(&buffer[1..]);
+        for _ in 0..3 {
+            update_next(buffer, orients, cursor);
+        }
+    }
 
-    let mut len = corners.len();
     let mut quads = Vec::new();
+    let mut len = corners.len();
+    for (i, j) in (0..len).circular_tuple_windows() {
+        let [a, b] = corners.get_many_mut([i, j]).unwrap();
+        if a.0 == b.0 && a.1 > b.1 {
+            a.0 += 1;
+            b.0 += 1;
+        } else if a.1 == b.1 && a.0 > b.0 {
+            a.1 += 1;
+            b.1 += 1;
+        }
+    }
     let mut corners = LinkedList::from_iter(corners);
     let mut cursor = corners.cursor_front_mut();
+    {
+        /*
+         * remove zero size quads (after shift)
+         * 
+         * Case A: remove pairs twice
+         * 
+         *   F---J     ->  |
+         *   L---7         |
+         * 
+         * Case B1: remove pair, last corner flips orientation
+         * 
+         *   F---J         |
+         *   L-------  ->  L---
+         * 
+         * Case B2: remove pair, last corner flips orientation
+         * 
+         *   F-------
+         *   L---7     ->  F---
+         * 
+         */
+        let mut left = len;
+        let mut last = *cursor.current().unwrap();
+        while left != 0 {
+            let current = *next(&mut cursor);
+            // Case *
+            if last == current {
+                cursor.remove_current();
+                remove_before(&mut cursor, 1);
+                // Case A
+                last = *prev(&mut cursor);
+                len -= 2;
+            } else {
+                last = current;
+            }
+            left -= 1;
+        }
+        if len == 0 {
+            return quads;
+        }
+    }
+    { // DEBUG: print final corners
+        for corner in &corners {
+            println!("(x: {}, y: {})", corner.0, corner.1);
+        }
+        cursor = corners.cursor_front_mut();
+    }
     let mut buffer = [(0, 0); 4];
-    for corner in &mut buffer[1..] {
-        *corner = *cursor.current().unwrap();
-        cursor.move_next();
-    }
     let mut orients = [Orient::Straight; 4];
-    orients[3] = Orient::from_corners(&buffer[1..]);
-    for _ in 0..3 {
-        move_next(&mut buffer, &mut orients, &mut cursor);
-    }
+    init_here(&mut buffer, &mut orients, &mut cursor);
+    /*
+     * replace bends with shortcuts, add removed corners as quads to result
+     * 
+     * Case A: four corners building a Quad, orientation RLLR  
+     * 
+     *   F---J        |
+     *   |        ->  |
+     *   L---7        |
+     * 
+     * Case B1: need new corner at the end, orientation RLL?
+     * 
+     *   F---J        |
+     *   |        ->  |
+     *   L-------     L---
+     * 
+     * Case B2: need new corner at the eginning, orientation ?LLR
+     * 
+     *   F-------     F---
+     *   |        ->  |
+     *   L---7        |
+     * 
+     * resulting shape should represent inner shape (top/left border coordinates + 1)
+     */
     while len != 4 {
-        move_next(&mut buffer, &mut orients, &mut cursor);
+        update_next(&mut buffer, &mut orients, &mut cursor);
         // ... -> buffer[0] -> ... -> *buffer[3]* -> ...
         let a = distance(buffer[0], buffer[1]);
         let b = distance(buffer[2], buffer[3]);
         match a.cmp(&b) {
             Ordering::Equal if orients == PATTERN => {
                 // Case A
+                dbg!(&buffer);
                 quads.push(Quad::from_corners(&buffer));
                 cursor.remove_current();
                 remove_before(&mut cursor, 3);
                 len -= 4;
+                init_here(&mut buffer, &mut orients, &mut cursor);
             },
             Ordering::Less if orients[..3] == PATTERN[..3] => {
                 // Case B1
+                dbg!(&buffer);
                 buffer[3] = lerp(buffer[2], buffer[3], a);
+                dbg!(&buffer[3]);
                 quads.push(Quad::from_corners(&buffer));
-                cursor.insert_before(buffer[3]);
-                cursor.move_prev();
-                remove_before(&mut cursor, 3);
+                remove_before(&mut cursor, 2);
+                *prev(&mut cursor) = buffer[3];
                 len -= 2;
+                init_here(&mut buffer, &mut orients, &mut cursor);
             },
             Ordering::Greater if orients[1..] == PATTERN[1..] => {
                 // Case B2
+                dbg!(&buffer);
                 buffer[0] = lerp(buffer[0], buffer[1], b);
+                dbg!(&buffer[0]);
                 quads.push(Quad::from_corners(&buffer));
-                cursor.remove_current();
                 remove_before(&mut cursor, 2);
-                cursor.insert_before(buffer[0]);
+                *cursor.current().unwrap() = buffer[0];
                 len -= 2;
+                init_here(&mut buffer, &mut orients, &mut cursor);
             }
             _ => ()
         }
@@ -442,7 +530,9 @@ pub fn part2(input: &str) -> Answer {
             if sum.is_negative() {
                 corners.reverse();
             }
-            1
+            quadrangulate(corners).into_iter()
+                .map( |q| q.area() )
+                .sum::<usize>()
         } )
         .pipe( |result| Ok(Cow::Owned(result.to_string())) )
 }

@@ -4,6 +4,7 @@
 #![feature(const_option)]
 #![feature(cmp_minmax)]
 #![feature(linked_list_cursors)]
+#![feature(get_many_mut)]
 
 pub mod puzzles;
 mod parse;
