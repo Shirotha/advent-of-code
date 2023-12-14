@@ -1,7 +1,7 @@
 use std::{
     borrow::Cow,
     cmp::{Ordering, minmax},
-    collections::{LinkedList, linked_list::CursorMut},
+    collections::{LinkedList, linked_list::CursorMut, hash_map::Entry},
     mem::transmute,
 };
 use itertools::Itertools;
@@ -53,9 +53,9 @@ impl Orient {
         let (a, b, c) = (&corners[0], &corners[1], &corners[2]);
         let cmp = if a.0 == b.0 {
             match a.1.cmp(&b.1) {
-                Ordering::Less => c.0.cmp(&b.0),
+                Ordering::Less => b.0.cmp(&c.0),
                 Ordering::Equal => panic!(),
-                Ordering::Greater => b.0.cmp(&c.0)
+                Ordering::Greater => c.0.cmp(&b.0)
             }
         } else if a.1 == b.1 {
             match a.0.cmp(&b.0) {
@@ -276,21 +276,9 @@ struct Quad {
 }
 impl Quad {
     #[inline]
-    fn from_corners(corners: &[Pos; 4]) -> Quad {
-        let ([xmin, xmax], [ymin, ymax]) = if corners[0].0 == corners[1].0 {
-            (
-                minmax(corners[0].0, corners[2].0),
-                minmax(corners[0].1, corners[1].1)
-            )
-        } else if corners[0].1 == corners[1].1 {
-            (
-                minmax(corners[0].0, corners[1].0),
-                minmax(corners[0].1, corners[2].1)
-            )
-        } else {
-            panic!()
-        };
-        Quad { /* topleft: (xmin, ymin), */ size: (xmax - xmin, ymax - ymin) }
+    fn from_corners(a: Pos, b: Pos) -> Quad {
+        let ([ymin, ymax], [xmin, xmax]) = (minmax(a.0, b.0), minmax(a.1, b.1));
+        Quad { /* topleft: (xmin, ymin), */ size: (ymax - ymin, xmax - xmin) }
     }
     #[inline]
     const fn area(&self) -> usize {
@@ -351,28 +339,120 @@ fn quadrangulate(mut corners: Vec<(usize, usize)>) -> Vec<Quad> {
     }
     #[inline]
     fn update_next(
-        buffer: &mut [Pos; 4],
+        buffer: &mut [Pos; 5],
         orients: &mut [Orient; 4],
         cursor: &mut CursorMut<Pos>
     ) {
         let next = *next(cursor);
-        *buffer = [buffer[1], buffer[2], buffer[3], next];
-        *orients = [orients[1], orients[2], orients[3], Orient::from_corners(&buffer[1..])];
+        *buffer = [buffer[1], buffer[2], buffer[3], buffer[4], next];
+        *orients = [orients[1], orients[2], orients[3], Orient::from_corners(&buffer[2..])];
     } 
     #[inline]
     fn init_here(
-        buffer: &mut [Pos; 4],
+        buffer: &mut [Pos; 5],
         orients: &mut [Orient; 4],
         cursor: &mut CursorMut<Pos>
     ) {
-        for corner in &mut buffer[1..] {
+        for corner in &mut buffer[3..] {
             *corner = *next(cursor);
         }
-        dbg!(&buffer);
-        orients[3] = Orient::from_corners(&buffer[1..]);
-        for _ in 0..3 {
+        for _ in 0..4 {
             update_next(buffer, orients, cursor);
         }
+    }
+    #[inline]
+    fn split_before(cursor: &mut CursorMut<Pos>, len: usize) -> LinkedList<Pos> {
+        // ASSERT: cursor doesn't cross None
+        let mut middle = cursor.split_before();
+        let mut local = middle.cursor_back_mut();
+        for _ in 1..len {
+            local.move_prev();
+        }
+        let left = local.split_before();
+        cursor.splice_before(left);
+        middle
+    }
+    #[inline]
+    fn split_after(cursor: &mut CursorMut<Pos>, len: usize) -> LinkedList<Pos> {
+        // ASSERT: cursor doesn't cross None
+        let mut middle = cursor.split_after();
+        let mut local = middle.cursor_front_mut();
+        for _ in 1..len {
+            local.move_next();
+        }
+        let right = local.split_after();
+        cursor.splice_after(right);
+        middle
+    }
+    fn partition(quads: &mut Vec<Quad>, cursor: &mut CursorMut<Pos>, mut len: usize) {
+        { // DEBUG: print corners
+            for _ in 0..len {
+                let corner = *next(cursor);
+                println!("(x: {}, y: {})", corner.1, corner.0);
+            }
+        }
+        let mut buffer = [(0, 0); 5];
+        let mut orients = [Orient::Straight; 4];
+        init_here(&mut buffer, &mut orients, cursor);
+        /*
+        * replace bends with shortcuts, add removed corners as quads to result
+        * 
+        * Case A: four corners building a Quad, orientation RLLR  
+        * 
+        *   F---J        |
+        *   |        ->  |
+        *   L---7        |
+        * 
+        * Case B1: need new corner at the end, orientation RLL?
+        * 
+        *   F---J        |
+        *   |        ->  |
+        *   L-------     L---
+        * 
+        * Case B2: need new corner at the eginning, orientation ?LLR
+        * 
+        *   F-------     F---
+        *   |        ->  |
+        *   L---7        |
+        * 
+        * resulting shape should represent inner shape (top/left border coordinates + 1)
+        */
+        while len != 4 {
+            // FIXME: lerp points wrong (replace b with a - b ?)
+            update_next(&mut buffer, &mut orients, cursor);
+            // ... -> buffer[0] -> ... -> buffer[3] -> *buffer[4]* -> ...
+            let a = distance(buffer[0], buffer[1]);
+            let b = distance(buffer[2], buffer[3]);
+            match a.cmp(&b) {
+                Ordering::Equal if orients == PATTERN => {
+                    // Case A
+                    quads.push(Quad::from_corners(buffer[0], buffer[2]));
+                    remove_before(cursor, 4);
+                    len -= 4;
+                    init_here(&mut buffer, &mut orients, cursor);
+                },
+                Ordering::Less if orients[..3] == PATTERN[..3] => {
+                    // Case B1
+                    quads.push(Quad::from_corners(buffer[0], buffer[2]));
+                    prev(cursor);
+                    remove_before(cursor, 2);
+                    *prev(cursor) = lerp(buffer[2], buffer[3], a);
+                    len -= 2;
+                    init_here(&mut buffer, &mut orients, cursor);
+                },
+                Ordering::Greater if orients[1..] == PATTERN[1..] => {
+                    // Case B2
+                    quads.push(Quad::from_corners(buffer[1], buffer[3]));
+                    prev(cursor);
+                    remove_before(cursor, 2);
+                    *cursor.current().unwrap() = lerp(buffer[0], buffer[1], b);
+                    len -= 2;
+                    init_here(&mut buffer, &mut orients, cursor);
+                }
+                _ => ()
+            }
+        }
+        quads.push(Quad::from_corners(buffer[0], buffer[2]));
     }
 
     let mut quads = Vec::new();
@@ -409,9 +489,9 @@ fn quadrangulate(mut corners: Vec<(usize, usize)>) -> Vec<Quad> {
          *   L---7     ->  F---
          * 
          */
-        let mut left = len;
         let mut last = *cursor.current().unwrap();
-        while left != 0 {
+        #[allow(clippy::mut_range_bound)]
+        for _ in 0..len {
             let current = *next(&mut cursor);
             // Case *
             if last == current {
@@ -423,85 +503,75 @@ fn quadrangulate(mut corners: Vec<(usize, usize)>) -> Vec<Quad> {
             } else {
                 last = current;
             }
-            left -= 1;
         }
         if len == 0 {
             return quads;
         }
     }
-    { // DEBUG: print final corners
-        for corner in &corners {
-            println!("(x: {}, y: {})", corner.0, corner.1);
-        }
-        cursor = corners.cursor_front_mut();
-    }
-    let mut buffer = [(0, 0); 4];
-    let mut orients = [Orient::Straight; 4];
-    init_here(&mut buffer, &mut orients, &mut cursor);
     /*
-     * replace bends with shortcuts, add removed corners as quads to result
+     * split polygon at overlapping points
      * 
-     * Case A: four corners building a Quad, orientation RLLR  
+     *     I | O
+     *    ---%---
+     *     O | I
      * 
-     *   F---J        |
-     *   |        ->  |
-     *   L---7        |
-     * 
-     * Case B1: need new corner at the end, orientation RLL?
-     * 
-     *   F---J        |
-     *   |        ->  |
-     *   L-------     L---
-     * 
-     * Case B2: need new corner at the eginning, orientation ?LLR
-     * 
-     *   F-------     F---
-     *   |        ->  |
-     *   L---7        |
-     * 
-     * resulting shape should represent inner shape (top/left border coordinates + 1)
      */
-    while len != 4 {
-        update_next(&mut buffer, &mut orients, &mut cursor);
-        // ... -> buffer[0] -> ... -> *buffer[3]* -> ...
-        let a = distance(buffer[0], buffer[1]);
-        let b = distance(buffer[2], buffer[3]);
-        match a.cmp(&b) {
-            Ordering::Equal if orients == PATTERN => {
-                // Case A
-                dbg!(&buffer);
-                quads.push(Quad::from_corners(&buffer));
-                cursor.remove_current();
-                remove_before(&mut cursor, 3);
-                len -= 4;
-                init_here(&mut buffer, &mut orients, &mut cursor);
+    let mut visited = HashMap::new();
+    let mut i: usize = 0;
+    let mut parity = false;
+    loop {
+        cursor.move_next();
+        if cursor.current().is_none() {
+            cursor.move_next();
+            parity = !parity;
+        }
+        let current = *cursor.current().unwrap();
+        match visited.entry(current) {
+            Entry::Occupied(previous) => {
+                let (j, p) = *previous.get();
+                /*
+                 * sub-list between j and i is free off overlapp and can be handled as a simple loop
+                 * 
+                 * Case A: split off before i, split off before j, join left and right parts, handle middle part
+                 * 
+                 *   None -> ... -> (j -> ... -> i - 1) -> i -> ... -> None
+                 * 
+                 * Case B: split off before i, split off before j, join left nd right parts, handle merged part
+                 * 
+                 *         ... -> (j -> ... -> None -> ... -> i - 1) -> i -> ...
+                 *                                <=>
+                 *   None -> ... -> i - 1) -> [i -> ... -> j - 1] -> (j -> ... -> None
+                 * 
+                 * Case C: there are no overlapps, handle whole list (i - j == len)
+                 * 
+                 *   .. -> j = i -> ...
+                 * 
+                 */
+                let sub = i - j;
+                if sub == len {
+                    partition(&mut quads, &mut cursor, len);
+                    return quads;
+                }
+                visited.clear();
+                len -= sub;
+                if p != parity {
+                    // TODO: think about if None can be reached here (and if it even matters)
+                    cursor.move_prev();
+                    let outer = split_after(&mut cursor, len);
+                    partition(&mut quads, &mut cursor, len);
+                    corners = outer;
+                    cursor = corners.cursor_front_mut();
+                } else {
+                    let mut inner = split_before(&mut cursor, sub);
+                    partition(&mut quads, &mut inner.cursor_front_mut(), sub);
+                }
             },
-            Ordering::Less if orients[..3] == PATTERN[..3] => {
-                // Case B1
-                dbg!(&buffer);
-                buffer[3] = lerp(buffer[2], buffer[3], a);
-                dbg!(&buffer[3]);
-                quads.push(Quad::from_corners(&buffer));
-                remove_before(&mut cursor, 2);
-                *prev(&mut cursor) = buffer[3];
-                len -= 2;
-                init_here(&mut buffer, &mut orients, &mut cursor);
-            },
-            Ordering::Greater if orients[1..] == PATTERN[1..] => {
-                // Case B2
-                dbg!(&buffer);
-                buffer[0] = lerp(buffer[0], buffer[1], b);
-                dbg!(&buffer[0]);
-                quads.push(Quad::from_corners(&buffer));
-                remove_before(&mut cursor, 2);
-                *cursor.current().unwrap() = buffer[0];
-                len -= 2;
-                init_here(&mut buffer, &mut orients, &mut cursor);
+            Entry::Vacant(empty) => {
+                empty.insert((i, parity));
+                i += 1;
             }
-            _ => ()
         }
     }
-    quads
 }
 
 pub fn part1(input: &str) -> Answer {
