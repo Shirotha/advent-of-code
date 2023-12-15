@@ -7,6 +7,7 @@ use std::{
 use itertools::Itertools;
 use ndarray::prelude::*;
 use nom::IResult;
+use num::Integer;
 use tap::Pipe as TapPipe;
 
 use crate::{*, parse::*};
@@ -286,7 +287,7 @@ impl Quad {
     }
 }
 
-fn quadrangulate(mut corners: Vec<(usize, usize)>) -> Vec<Quad> {
+fn quadrangulate(corners: Vec<(usize, usize)>) -> Vec<Quad> {
     // ASSERT: corners are positively oriented
     // NOTE: positions will be treated as top-left of the tile
     // NOTE: returns inner shape (without borders)
@@ -325,13 +326,13 @@ fn quadrangulate(mut corners: Vec<(usize, usize)>) -> Vec<Quad> {
             match a.1.cmp(&b.1) {
                 Ordering::Less => (a.0, a.1 + d),
                 Ordering::Equal => panic!(),
-                Ordering::Greater => (b.0, b.1 + d)
+                Ordering::Greater => (a.0, a.1 - d)
             }
         } else if a.1 == b.1 {
             match a.0.cmp(&b.0) {
                 Ordering::Less => (a.0 + d, a.1),
                 Ordering::Equal => panic!(),
-                Ordering::Greater => (b.0 + d, b.1)
+                Ordering::Greater => (a.0 - d, a.1)
             }
         } else {
             panic!();
@@ -385,12 +386,11 @@ fn quadrangulate(mut corners: Vec<(usize, usize)>) -> Vec<Quad> {
         middle
     }
     fn partition(quads: &mut Vec<Quad>, cursor: &mut CursorMut<Pos>, mut len: usize) {
-        { // DEBUG: print corners
-            for _ in 0..len {
-                let corner = *next(cursor);
-                println!("(x: {}, y: {})", corner.1, corner.0);
-            }
+        for _ in 0..len {
+            let corner = *next(cursor);
+            println!("(x: {}, y: {})", corner.1, corner.0);
         }
+        println!();
         let mut buffer = [(0, 0); 5];
         let mut orients = [Orient::Straight; 4];
         init_here(&mut buffer, &mut orients, cursor);
@@ -418,7 +418,6 @@ fn quadrangulate(mut corners: Vec<(usize, usize)>) -> Vec<Quad> {
         * resulting shape should represent inner shape (top/left border coordinates + 1)
         */
         while len != 4 {
-            // FIXME: lerp points wrong (replace b with a - b ?)
             update_next(&mut buffer, &mut orients, cursor);
             // ... -> buffer[0] -> ... -> buffer[3] -> *buffer[4]* -> ...
             let a = distance(buffer[0], buffer[1]);
@@ -445,7 +444,7 @@ fn quadrangulate(mut corners: Vec<(usize, usize)>) -> Vec<Quad> {
                     quads.push(Quad::from_corners(buffer[1], buffer[3]));
                     prev(cursor);
                     remove_before(cursor, 2);
-                    *cursor.current().unwrap() = lerp(buffer[0], buffer[1], b);
+                    *cursor.current().unwrap() = lerp(buffer[1], buffer[0], b);
                     len -= 2;
                     init_here(&mut buffer, &mut orients, cursor);
                 }
@@ -454,24 +453,9 @@ fn quadrangulate(mut corners: Vec<(usize, usize)>) -> Vec<Quad> {
         }
         quads.push(Quad::from_corners(buffer[0], buffer[2]));
     }
-
-    let mut quads = Vec::new();
-    let mut len = corners.len();
-    for (i, j) in (0..len).circular_tuple_windows() {
-        let [a, b] = corners.get_many_mut([i, j]).unwrap();
-        if a.0 == b.0 && a.1 > b.1 {
-            a.0 += 1;
-            b.0 += 1;
-        } else if a.1 == b.1 && a.0 > b.0 {
-            a.1 += 1;
-            b.1 += 1;
-        }
-    }
-    let mut corners = LinkedList::from_iter(corners);
-    let mut cursor = corners.cursor_front_mut();
-    {
+    fn fix_corners(cursor: &mut CursorMut<Pos>, mut len: usize) -> usize {
         /*
-         * remove zero size quads (after shift)
+         * reduce unnessesary points
          * 
          * Case A: remove pairs twice
          * 
@@ -488,25 +472,48 @@ fn quadrangulate(mut corners: Vec<(usize, usize)>) -> Vec<Quad> {
          *   F-------
          *   L---7     ->  F---
          * 
+         * Case C: remove intermediate point
+         * 
+         *   ---X---   ->  -------
+         * 
          */
         let mut last = *cursor.current().unwrap();
+        let mut last_y_diff: Option<bool> = None;
+        // TODO: find better bound
         #[allow(clippy::mut_range_bound)]
-        for _ in 0..len {
-            let current = *next(&mut cursor);
+        for _ in 0..(len << 1) {
+            let current = *next(cursor);
             // Case *
             if last == current {
                 cursor.remove_current();
-                remove_before(&mut cursor, 1);
+                remove_before(cursor, 1);
                 // Case A
-                last = *prev(&mut cursor);
+                last = *prev(cursor);
+                if let Some(last_y_diff) = &mut last_y_diff {
+                    *last_y_diff = !*last_y_diff;
+                }
                 len -= 2;
             } else {
+                let y_diff = last.0 != current.0;
+                if last_y_diff.is_some_and( |last_y_diff| last_y_diff == y_diff ) {
+                    // Case C
+                    remove_before(cursor, 1);
+                    len -= 1;
+                } else {
+                    last_y_diff = Some(y_diff);
+                }
                 last = current;
             }
         }
-        if len == 0 {
-            return quads;
-        }
+        len
+    }
+    let mut quads = Vec::new();
+    let mut len = corners.len();
+    let mut corners = LinkedList::from_iter(corners);
+    let mut cursor = corners.cursor_front_mut();
+    len = fix_corners(&mut cursor, len);
+    if len == 0 {
+        return quads;
     }
     /*
      * split polygon at overlapping points
@@ -515,6 +522,11 @@ fn quadrangulate(mut corners: Vec<(usize, usize)>) -> Vec<Quad> {
      *    ---%---
      *     O | I
      * 
+     *  FIXME: not covered !
+     * 
+     *     I |    O    | ?
+     *    ---%---...---%---
+     *            O    | ?
      */
     let mut visited = HashMap::new();
     let mut i: usize = 0;
@@ -565,12 +577,38 @@ fn quadrangulate(mut corners: Vec<(usize, usize)>) -> Vec<Quad> {
                     let mut inner = split_before(&mut cursor, sub);
                     partition(&mut quads, &mut inner.cursor_front_mut(), sub);
                 }
+                len = fix_corners(&mut cursor, len);
+                if len == 0 {
+                    return quads;
+                }
             },
             Entry::Vacant(empty) => {
                 empty.insert((i, parity));
                 i += 1;
             }
         }
+    }
+}
+
+#[inline]
+fn correct_position(data: &Array2<Pipe>, pos: Pos, orient: Orient) -> Pos {
+    let magic_number = (match data[pos] {
+        Pipe::NW => 1,
+        Pipe::NE => 2,
+        Pipe::SE => 3,
+        Pipe::SW => 4,
+        _ => panic!()
+    } + match orient {
+        Orient::Left => 0,
+        Orient::Right => 2,
+        _ => panic!()
+    }) % 4;
+    match magic_number {
+        0 => (pos.0 + 1, pos.1),
+        1 => pos,
+        2 => (pos.0, pos.1 + 1),
+        3 => (pos.0 + 1, pos.1 + 1),
+        _ => panic!()
     }
 }
 
@@ -589,16 +627,17 @@ pub fn part1(input: &str) -> Answer {
 pub fn part2(input: &str) -> Answer {
     parse(input, grid)?
         .pipe( |(mut grid, start)| {
-            let (dir, _) = patch(&mut grid, start).dirs().unwrap();
+            let (a, b) = patch(&mut grid, start).dirs().unwrap();
             let mut sum = 0;
-            let mut corners = Corners::new(&grid, start, dir)
+            let mut corners = Corners::new(&grid, start, a)
                 .map( |(pos, orient)| {
                     sum += orient.sign();
-                    pos
-                } )
-                .collect_vec();
+                    correct_position(&grid, pos, orient)
+                } ).collect_vec();
             if sum.is_negative() {
-                corners.reverse();
+                Corners::new(&grid, start, b)
+                    .map( |(pos, orient)| correct_position(&grid, pos, orient) )
+                    .collect_into(&mut corners);
             }
             quadrangulate(corners).into_iter()
                 .map( |q| q.area() )

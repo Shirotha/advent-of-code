@@ -5,6 +5,7 @@
 #![feature(cmp_minmax)]
 #![feature(linked_list_cursors)]
 #![feature(get_many_mut)]
+#![feature(iter_collect_into)]
 
 pub mod puzzles;
 mod parse;
