@@ -1,6 +1,5 @@
 use std::{
     borrow::Cow,
-    cmp::Ordering,
     collections::BTreeSet,
     mem::MaybeUninit,
 };
@@ -44,8 +43,8 @@ impl SparsePointSet {
                     ys.insert(y);
                     points.push([x, y]);
                 }
-                '\r' => continue,
-                _ => ()
+                '.' => (),
+                _ => continue,
             }
             x += 1;
         }
@@ -58,16 +57,16 @@ impl SparsePointSet {
 
 #[derive(Debug)]
 struct Metric1 {
-    cost: Vec<u8>
+    cost: Vec<u32>
 }
 impl Metric1 {
-    fn new(set: &[u8], max: u8) -> Self {
+    fn new(set: &[u8], max: u8, expand: u32) -> Self {
         // ASSERT: max >= set.last
         let mut cost = vec![0; max as usize + 1];
         let mut i = 0usize;
         for next in set {
             while i as u8 != *next {
-                cost[i] = cost[i.saturating_sub(1)] + 2;
+                cost[i] = cost[i.saturating_sub(1)] + expand;
                 i += 1;
             }
             cost[i] = cost[i.saturating_sub(1)] + 1;
@@ -75,39 +74,45 @@ impl Metric1 {
         }
         Metric1 { cost }
     }
-    fn distance(&self, a: u8, b: u8) -> u32 {
-        self.cost[a as usize].abs_diff(self.cost[b as usize]) as u32
+    fn distance(&self, a: u8, b: u8) -> u64 {
+        self.cost[a as usize].abs_diff(self.cost[b as usize]) as u64
     }
 }
 #[derive(Debug)]
 struct Metric<const N: usize>([Metric1; N]);
 impl<const N: usize> Metric<N> {
-    fn new(sets: [&[u8]; N], max: [u8; N]) -> Self {
+    fn new(sets: [&[u8]; N], max: [u8; N], expand: u32) -> Self {
         unsafe {
             let mut dims = MaybeUninit::<Metric1>::uninit_array::<N>();
             for (metric, set, max) in izip!(&mut dims, sets, max) {
-                metric.write(Metric1::new(set, max));
+                metric.write(Metric1::new(set, max, expand));
             }
             Self(MaybeUninit::array_assume_init(dims))
         }
     }
-    fn distance(&self, a: [u8; N], b: [u8; N]) -> u32 {
-        izip!(&self.0, a, b).map( |(metric, a, b)| metric.distance(a, b) ).sum::<u32>()
+    fn distance(&self, a: [u8; N], b: [u8; N]) -> u64 {
+        izip!(&self.0, a, b).map( |(metric, a, b)| metric.distance(a, b) ).sum::<u64>()
     }
 }
 
 pub fn part1(input: &str) -> Answer {
     parse(input, SparsePointSet::parse)?.pipe( |sps| {
-        let metric = Metric::new([&sps.xs, &sps.ys], sps.max);
+        let metric = Metric::new([&sps.xs, &sps.ys], sps.max, 2);
         sps.points.into_iter().tuple_combinations()
             .map( |(a, b)| metric.distance(a, b))
-            .sum::<u32>()
+            .sum::<u64>()
     } )
         .pipe( |result| Ok(Cow::Owned(result.to_string())) )
 }
 
 pub fn part2(input: &str) -> Answer {
-    todo!()
+    parse(input, SparsePointSet::parse)?.pipe( |sps| {
+        let metric = Metric::new([&sps.xs, &sps.ys], sps.max, 1_000_000);
+        sps.points.into_iter().tuple_combinations()
+            .map( |(a, b)| metric.distance(a, b))
+            .sum::<u64>()
+    } )
+        .pipe( |result| Ok(Cow::Owned(result.to_string())) )
 }
 
 inventory::submit! { Puzzle::new(2023, 11, 1, part1) }
@@ -135,9 +140,20 @@ mod test {
     const OUTPUT1: &str = "538";
 
     const INPUT2: &str = indoc! {"
-    
+        ....#........
+        .........#...
+        #............
+        .............
+        .............
+        ........#....
+        .#...........
+        ............#
+        .............
+        .............
+        .........#...
+        #....#.......    
     "};
-    const OUTPUT2: &str = "";
+    const OUTPUT2: &str = "164000210";
 
     #[test]
     fn test1() {
