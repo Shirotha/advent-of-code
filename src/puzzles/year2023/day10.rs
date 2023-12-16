@@ -289,8 +289,7 @@ impl Quad {
 
 fn quadrangulate(corners: Vec<(usize, usize)>) -> Vec<Quad> {
     // ASSERT: corners are positively oriented
-    // NOTE: positions will be treated as top-left of the tile
-    // NOTE: returns inner shape (without borders)
+    // ASSERT: no crossing edges
     const PATTERN: [Orient; 4] = [Orient::Right, Orient::Left, Orient::Left, Orient::Right];
 
     #[inline]
@@ -386,6 +385,45 @@ fn quadrangulate(corners: Vec<(usize, usize)>) -> Vec<Quad> {
         middle
     }
     fn partition(quads: &mut Vec<Quad>, cursor: &mut CursorMut<Pos>, mut len: usize) {
+        if let Some(current) = cursor.current() {
+            println!("cursor at: (x: {}, y: {})", current.1, current.0)
+        };
+        for _ in 0..len {
+            let corner = *next(cursor);
+            println!("(x: {}, y: {})", corner.1, corner.0);
+        }
+        println!();
+        if len.is_odd() {
+            // ASSERT: cursor should point at front
+            /*
+             * misaligned seam
+             * 
+             * Case A: cut front
+             * 
+             *    |      |
+             *   [1]---[-1]---[0]
+             * 
+             * Case B: cut back
+             * 
+             *     |     |
+             *   [-2]---[0]---[-1]
+             * 
+             */
+            let a0 = cursor.current().unwrap().0;
+            let a1 = cursor.peek_next().unwrap().0;
+            cursor.move_prev();
+            assert!(cursor.current().is_none());
+            cursor.move_prev();
+            let b0 = cursor.current().unwrap().0;
+            if (a0 == a1) == (b0 == a0) {
+                // Case A
+                cursor.move_next();
+                cursor.move_next();
+            }
+            // Case *
+            cursor.remove_current();
+            len -= 1;
+        }
         for _ in 0..len {
             let corner = *next(cursor);
             println!("(x: {}, y: {})", corner.1, corner.0);
@@ -452,6 +490,17 @@ fn quadrangulate(corners: Vec<(usize, usize)>) -> Vec<Quad> {
             }
         }
         quads.push(Quad::from_corners(buffer[0], buffer[2]));
+    }
+    fn clip_tail(cursor: &mut CursorMut<Pos>, mut len: usize) -> usize {
+        // TODO: if len is odd, handle orphan corner
+        loop {
+            let a = *cursor.current().unwrap();
+            let b = *prev(cursor);
+            if a != b { return len; }
+            cursor.remove_current();
+            cursor.remove_current();
+            len -= 2;
+        }
     }
     fn fix_corners(cursor: &mut CursorMut<Pos>, mut len: usize) -> usize {
         /*
@@ -527,6 +576,9 @@ fn quadrangulate(corners: Vec<(usize, usize)>) -> Vec<Quad> {
      *     I |    O    | ?
      *    ---%---...---%---
      *            O    | ?
+     * 
+     *  FIXME: misaligned overlapp not covered (e.g. edge from 1 -> 4, and edge 3 -> 2)
+     * 
      */
     let mut visited = HashMap::new();
     let mut i: usize = 0;
@@ -548,7 +600,7 @@ fn quadrangulate(corners: Vec<(usize, usize)>) -> Vec<Quad> {
                  * 
                  *   None -> ... -> (j -> ... -> i - 1) -> i -> ... -> None
                  * 
-                 * Case B: split off before i, split off before j, join left nd right parts, handle merged part
+                 * Case B: split off before i, split off before j, join left and right parts, handle merged part
                  * 
                  *         ... -> (j -> ... -> None -> ... -> i - 1) -> i -> ...
                  *                                <=>
@@ -561,23 +613,27 @@ fn quadrangulate(corners: Vec<(usize, usize)>) -> Vec<Quad> {
                  */
                 let sub = i - j;
                 if sub == len {
+                    // Case C
                     partition(&mut quads, &mut cursor, len);
                     return quads;
                 }
                 visited.clear();
                 len -= sub;
                 if p != parity {
+                    // Case B
                     // TODO: think about if None can be reached here (and if it even matters)
                     cursor.move_prev();
                     let outer = split_after(&mut cursor, len);
+                    next(&mut cursor);
                     partition(&mut quads, &mut cursor, len);
                     corners = outer;
                     cursor = corners.cursor_front_mut();
                 } else {
+                    // Case A
                     let mut inner = split_before(&mut cursor, sub);
                     partition(&mut quads, &mut inner.cursor_front_mut(), sub);
                 }
-                len = fix_corners(&mut cursor, len);
+                len = clip_tail(&mut cursor, len);
                 if len == 0 {
                     return quads;
                 }
