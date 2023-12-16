@@ -2,6 +2,9 @@
 #![feature(float_next_up_down)]
 #![feature(portable_simd)]
 #![feature(const_option)]
+#![feature(maybe_uninit_uninit_array)]
+#![feature(maybe_uninit_array_assume_init)]
+#![feature(const_trait_impl)]
 
 pub mod puzzles;
 mod parse;
