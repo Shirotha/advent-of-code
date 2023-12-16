@@ -23,6 +23,9 @@ num = "0.4.1"
 glam = { version = "0.24.2", features = ["std", "core-simd", "debug-glam-assert"] }
 num-traits = "0.2.17"
 clap = { version = "4.4.10", features = ["derive"] }
+bit-vec = "0.6.3"
+#partial-borrow = "1.0.1"
+#easy-ext = "1.0.1"
 
 [dev-dependencies]
 divan = "0.1.3"

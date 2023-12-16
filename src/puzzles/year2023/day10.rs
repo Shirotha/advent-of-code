@@ -2,6 +2,8 @@ use std::{
     borrow::Cow,
     mem::transmute
 };
+use bit_vec::BitVec;
+use itertools::Itertools;
 use ndarray::prelude::*;
 use nom::IResult;
 use tap::Pipe as TapPipe;
@@ -192,7 +194,30 @@ pub fn part1(input: &str) -> Answer {
 }
 
 pub fn part2(input: &str) -> Answer {
-    todo!()
+    parse(input, grid)?
+        .pipe( |(mut grid, start)| {
+            let (height, width) = grid.dim();
+            let (dir, _) = patch(&mut grid, start).dirs().unwrap();
+            let mut path = BitVec::from_elem(width * height, false);
+            for ((row, column), _) in Walker::new(&grid, start, dir)
+                .take_while_inclusive( |(pos, _)| *pos != start )
+            {
+                path.set(row * width + column, true);
+            }
+            let mut sum = 0;
+            let mut is_inside = false;
+            for (i, pipe) in grid.iter().enumerate() {
+                if path[i] {
+                    if matches!(pipe, Pipe::NS | Pipe::NW | Pipe::NE) {
+                        is_inside = !is_inside;
+                    }
+                } else if is_inside {
+                    sum += 1;
+                }  
+            }
+            sum
+        } )
+        .pipe( |result| Ok(Cow::Owned(result.to_string())) )
 }
 
 inventory::submit! { Puzzle::new(2023, 10, 1, part1) }
