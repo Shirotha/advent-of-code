@@ -71,41 +71,48 @@ enum PathState {
     Path
 }
 
-pub struct PathIter<N, I, F> {
+pub struct PathIter<N, P, I, F, G> {
     dfs: DFSIter<N, I, F>,
-    path: Vec<N>
+    path_map: G,
+    path: Vec<P>
 }
-impl<N: Clone, I, F> PathIter<N, I, F>
-    where F: FnMut(&N) -> Option<I>
+impl<N, P, I, F, G> PathIter<N, P, I, F, G>
+where
+    F: FnMut(&N) -> Option<I>,
+    G: FnMut(&N) -> P
 {
     #[inline]
-    pub fn new(neighbours: F, root: N) -> Self {
-        Self { dfs: DFSIter::new(neighbours, root.clone()), path: vec![root] }
+    pub fn new(neighbours: F, mut path_map: G, root: N) -> Self {
+        let path = vec![path_map(&root)];
+        Self { dfs: DFSIter::new(neighbours, root), path_map, path }
     }
 }
-impl<N: Clone, I, F> PathIter<N, I, F> {
+impl<N, P: Clone, I, F, G> PathIter<N, P, I, F, G> {
     #[inline]
-    fn path(&mut self) -> Vec<N> {
+    fn path(&mut self) -> Vec<P> {
         let path = self.path.clone();
         self.path.pop();
         path
     }
 }
-impl<N, I, F> PathIter<N, I, F>
+impl<N, P, I, F, G> PathIter<N, P, I, F, G>
 where
     I: Iterator<Item = N>,
-    F: FnMut(&N) -> Option<I>
+    F: FnMut(&N) -> Option<I>,
+    G: FnMut(&N) -> P
 {
     #[inline]
     fn step(&mut self) -> PathState {
         match self.dfs.step() {
             DFSState::Done => PathState::Done,
             DFSState::Branch => {
-                self.path.push(self.dfs.current.take().unwrap());
+                let path = (self.path_map)(self.dfs.current.as_ref().unwrap());
+                self.path.push(path);
                 PathState::Walking
             },
             DFSState::Leaf => {
-                self.path.push(self.dfs.current.take().unwrap());
+                let path = (self.path_map)(self.dfs.current.as_ref().unwrap());
+                self.path.push(path);
                 PathState::Path
             },
             DFSState::Backtrack => {
@@ -115,12 +122,13 @@ where
         }
     }
 }
-impl<'a, N: Clone, I, F> Iterator for &'a mut PathIter<N, I, F>
+impl<'a, N, P: Clone, I, F, G> Iterator for &'a mut PathIter<N, P, I, F, G>
 where
     I: Iterator<Item = N>,
-    F: FnMut(&N) -> Option<I>
+    F: FnMut(&N) -> Option<I>,
+    G: FnMut(&N) -> P
 {
-    type Item = Vec<N>;
+    type Item = Vec<P>;
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         loop {
@@ -180,7 +188,7 @@ mod test {
                 .filter( |neighbours| !neighbours.is_empty() )
                 .map( |neighbours| neighbours.iter().copied() )
         };
-        let mut iter = PathIter::new(neighbours, 0);
+        let mut iter = PathIter::new(neighbours, |x| *x , 0);
         assert_eq!(iter.collect_vec(), vec![
             vec![0, 1, 3, 4],
             vec![0, 2, 4],
