@@ -5,9 +5,11 @@
 #![feature(maybe_uninit_uninit_array)]
 #![feature(maybe_uninit_array_assume_init)]
 #![feature(const_trait_impl)]
+#![feature(stmt_expr_attributes)]
 
 pub mod puzzles;
 mod parse;
+mod iter;
 
 use std::{borrow::Cow, collections::HashMap};
 use thiserror::Error;
