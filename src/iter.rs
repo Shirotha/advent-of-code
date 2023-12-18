@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DFSState {
     Done,
     Branch,
@@ -7,6 +8,7 @@ enum DFSState {
     Backtrack
 }
 
+#[derive(Debug, Clone)]
 pub struct DFSIter<N, I, F> {
     neighbours: F,
     stack: VecDeque<I>,
@@ -65,12 +67,14 @@ where
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PathState {
     Done,
     Walking,
     Path
 }
 
+#[derive(Debug, Clone)]
 pub struct PathIter<N, P, I, F, G> {
     dfs: DFSIter<N, I, F>,
     path_map: G,
@@ -122,7 +126,7 @@ where
         }
     }
 }
-impl<'a, N, P: Clone, I, F, G> Iterator for &'a mut PathIter<N, P, I, F, G>
+impl<N, P: Clone, I, F, G> Iterator for PathIter<N, P, I, F, G>
 where
     I: Iterator<Item = N>,
     F: FnMut(&N) -> Option<I>,
@@ -188,7 +192,7 @@ mod test {
                 .filter( |neighbours| !neighbours.is_empty() )
                 .map( |neighbours| neighbours.iter().copied() )
         };
-        let mut iter = PathIter::new(neighbours, |x| *x , 0);
+        let iter = PathIter::new(neighbours, |x| *x , 0);
         assert_eq!(iter.collect_vec(), vec![
             vec![0, 1, 3, 4],
             vec![0, 2, 4],
