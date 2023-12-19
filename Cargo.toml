@@ -37,9 +37,6 @@ lto = "fat"
 panic = "abort"
 strip = "debuginfo"
 
-[profile.dev]
-opt-level = 1
-
 [profile.dev.package."*"]
 opt-level = 3
 

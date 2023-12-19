@@ -7,6 +7,7 @@
 #![feature(const_trait_impl)]
 #![feature(type_alias_impl_trait)]
 #![feature(stmt_expr_attributes)]
+#![feature(array_windows)]
 
 pub mod puzzles;
 mod parse;
