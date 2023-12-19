@@ -12,7 +12,8 @@ fn bench1(bencher: Bencher) {
     bencher.bench_local( move || { let _ = black_box(part1(&input)); } );
 }
 
-#[divan::bench]
+#[allow(dead_code)]
+//#[divan::bench]
 fn bench2(bencher: Bencher) {
     let file = default_input_file("./src/puzzles", 2023, 12, 2);
     let input = read_to_string(file).unwrap();

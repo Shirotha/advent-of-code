@@ -30,7 +30,9 @@ impl Spring {
     }
 }
 
-type Node = (usize, usize, u8, Option<Spring>);
+type Node = (usize, usize, usize);
+type Branch = smallvec::IntoIter<[Node; 2]>;
+type Solutions = DFSIter<Node, Branch, impl FnMut(&Node) -> Option<Branch>>;
 
 struct Record {
     data: Vec<Spring>,
@@ -46,58 +48,75 @@ impl Record {
         Ok((input, Self { data, hint }))
     }
     #[inline]
-    fn into_solutions(self) -> impl Iterator<Item = Vec<Spring>> {
-        const ROOT: Node = (0, 0, 0, None);
-        let neighbours = move |(data_i, hint_i, count, _): &Node| {
-            let complete_hint = (data_i + 1, hint_i + 1, 0, Some(Spring::Operational));
-            let in_group = (data_i + 1, *hint_i, count + 1, Some(Spring::Damaged));
-            let between_groups = (data_i + 1, *hint_i, 0, Some(Spring::Operational));
-            let deadend = SmallVec::from_buf_and_len([ROOT, ROOT], 0);
-            let either = SmallVec::from_buf([in_group, between_groups]);
-            let in_group = SmallVec::from_buf_and_len([in_group, ROOT], 1);
-            let between_groups = SmallVec::from_buf_and_len([between_groups, ROOT], 1);
-            let complete_hint = SmallVec::from_buf_and_len([complete_hint, ROOT], 1);
-
-            let spring = if let Some(current) = self.data.get(*data_i) {
-                *current
-            } else if *hint_i == self.hint.len() 
-                || *hint_i == self.hint.len() - 1 && *count == self.hint[*hint_i]
+    fn unfold(mut self, factor: usize) -> Self {
+        self.data.push(Spring::Unknown);
+        let mut data = self.data.repeat(factor);
+        data.pop();
+        let hint = self.hint.repeat(factor);
+        Self { data, hint }
+    }
+    #[inline]
+    fn into_solutions(self) -> Solutions {
+        let reserved = self.hint.iter().sum::<u8>() as usize + self.hint.len() - 1;
+        let root = (0, 0, self.data.len() - reserved);
+        let neighbours = move |(data_i, hint_i, last): &Node| {
+            let (children, len) = if data_i > last {
+                ([root, root], 0)
+            } else if let Some(&hint) = self.hint.get(*hint_i) {
+                let (mut data_i, hint) = (*data_i, hint as usize);
+                while let Some(&spring) = self.data.get(data_i) {
+                    if spring == Spring::Operational {
+                        data_i += 1;
+                    } else {
+                        break;
+                    }
+                }
+                if let Some(&spring) = self.data.get(data_i) {
+                    if (hint == 1 || self.data.iter().skip(data_i).take(hint)
+                            .all( |spring| *spring != Spring::Operational )
+                        ) && !self.data.get(data_i + hint)
+                            .is_some_and( |spring| *spring == Spring::Damaged )
+                    {
+                        if spring == Spring::Unknown {
+                            ([(data_i + hint + 1, hint_i + 1, last + hint + 1), (data_i + 1, *hint_i, *last)], 2)
+                        } else {
+                            ([(data_i + hint + 1, hint_i + 1, last + hint + 1), root], 1)
+                        }
+                    } else if spring == Spring::Unknown {
+                        ([(data_i + 1, *hint_i, *last), root], 1)
+                    } else {
+                        ([root, root], 0)
+                    }
+                } else {
+                    ([root, root], 0)
+                }
+            } else if self.data.iter().skip(*data_i)
+                .all( |spring| *spring != Spring::Damaged )
             {
                 return None;
-            } else {
-                return Some(deadend.into_iter());
-            };
-            let items = if let Some(&hint) = self.hint.get(*hint_i) {
-                if *count == 0 {
-                    match spring {
-                        Spring::Operational => between_groups,
-                        Spring::Damaged => in_group,
-                        Spring::Unknown => either
-                    }
-                } else if *count == hint {
-                    if spring == Spring::Damaged { deadend }
-                    else { complete_hint }
-                } else if spring == Spring::Operational { deadend }
-                else { in_group }
-            } else if spring == Spring::Damaged { deadend }
-            else { between_groups };
-            Some(items.into_iter())
+            } else { ([root, root], 0) };
+            Some(SmallVec::from_buf_and_len(children, len).into_iter())
         };
-        let path_map = #[inline] 
-            |(_, _, _, current): &Node| current.unwrap_or(Spring::Unknown);
-        PathIter::new(neighbours, path_map, ROOT)
+        DFSIter::new(neighbours, root)
     }
 }
 
 pub fn part1(input: &str) -> Answer {
     parse(input, lines(Record::parse))?.into_par_iter()
-        .map( |record| record.into_solutions().count() )
-        .sum::<usize>()
+        .map( |record| record.into_solutions().count_leaves::<u16>() )
+        .sum::<u16>()
         .pipe( |result| Ok(Cow::Owned(result.to_string())) )
 }
 
 pub fn part2(input: &str) -> Answer {
-    todo!()
+    parse(input, lines(Record::parse))?.into_par_iter().enumerate()
+        .map( |(row, record)| {
+            let result = record.unfold(5).into_solutions().count_leaves::<u64>();
+            println!("row {}: {}", row + 1, result);
+            result
+        } )
+        .sum::<u64>()
+        .pipe( |result| Ok(Cow::Owned(result.to_string())) )
 }
 
 inventory::submit! { Puzzle::new(2023, 12, 1, part1) }
@@ -119,9 +138,14 @@ mod test {
     const OUTPUT1: &str = "21";
 
     const INPUT2: &str = indoc! {"
-    
+        ???.### 1,1,3
+        .??..??...?##. 1,1,3
+        ?#?#?#?#?#?#?#? 1,3,1,6
+        ????.#...#... 4,1,1
+        ????.######..#####. 1,6,5
+        ?###???????? 3,2,1
     "};
-    const OUTPUT2: &str = "";
+    const OUTPUT2: &str = "525152";
 
     #[test]
     fn test1() {

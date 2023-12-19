@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use num_traits::PrimInt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DFSState {
@@ -52,6 +53,18 @@ where
             DFSState::Done
         }
     }
+    #[inline]
+    pub fn count_leaves<T: PrimInt>(mut self) -> T {
+        let mut count = T::zero();
+        let one = T::one();
+        loop {
+            match self.step() {
+                DFSState::Done => return count,
+                DFSState::Leaf => count = count + one,
+                _ => (),
+            }
+        }
+    }
 }
 impl<N, I, F> Iterator for DFSIter<N, I, F>
 where
@@ -85,6 +98,7 @@ where
     F: FnMut(&N) -> Option<I>,
     G: FnMut(&N) -> P
 {
+    #[allow(dead_code)]
     #[inline]
     pub fn new(neighbours: F, mut path_map: G, root: N) -> Self {
         let path = vec![path_map(&root)];
