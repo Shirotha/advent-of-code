@@ -71,6 +71,35 @@ impl<T: Eq> BitMatrix<T> {
         None
     }
 }
+impl<T: PrimInt> BitMatrix<T> {
+    #[inline]
+    fn broken_mirror_axis(&self, errors: u32) -> Option<usize> {
+        #[inline(always)]
+        fn distance<T: PrimInt>(a: T, b: T) -> u32 {
+            (a ^ b).count_ones()
+        }
+
+        let max = self.0.len() - 1;
+        'outer: for axis in self.0.array_windows()
+            .positions( |[a, b]| distance(*a, *b) <= errors )
+        {
+            let (mut i, mut j) = (axis, axis + 1);
+            let mut total = distance(self.0[i], self.0[j]);
+            while i != 0 && j != max {
+                i -= 1;
+                j += 1;
+                total += distance(self.0[i], self.0[j]);
+                if total > errors {
+                    continue 'outer;
+                }
+            }
+            if total == errors {
+                return Some(axis + 1);
+            }
+        }
+        None
+    }
+}
 
 pub fn part1(input: &str) -> Answer {
     parse(input, separated_list1(line_ending, BitMatrix::<u32>::parse))?.into_iter()
@@ -85,7 +114,15 @@ pub fn part1(input: &str) -> Answer {
 }
 
 pub fn part2(input: &str) -> Answer {
-    todo!()
+    parse(input, separated_list1(line_ending, BitMatrix::<u32>::parse))?.into_iter()
+        .map( |matrix| {
+            matrix.broken_mirror_axis(1).map_or_else(
+                || matrix.transpose().broken_mirror_axis(1).unwrap(),
+                |x| 100 * x
+            )
+        } )
+        .sum::<usize>()
+        .pipe( |result| Ok(Cow::Owned(result.to_string())) )
 }
 
 inventory::submit! { Puzzle::new(2023, 13, 1, part1) }
