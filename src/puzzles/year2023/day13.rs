@@ -4,7 +4,7 @@ use nom::{
     IResult,
     character::complete::{one_of, line_ending},
     multi::separated_list1,
-    combinator::iterator
+    combinator::{iterator, opt}
 };
 use num_traits::PrimInt;
 use tap::Pipe;
@@ -35,7 +35,7 @@ impl<T: PrimInt + Sum<T>> BitMatrix<T> {
             } else {
                 width = Some(digit.trailing_zeros());
             }
-            input = line_ending(iter.finish()?.0)?.0;
+            input = opt(line_ending)(iter.finish()?.0)?.0;
         }
         Ok((input, Self(data, width.unwrap())))
     }
@@ -71,7 +71,7 @@ impl<T: Eq> BitMatrix<T> {
         None
     }
 }
-// FIXME 42971 is too low
+
 pub fn part1(input: &str) -> Answer {
     parse(input, separated_list1(line_ending, BitMatrix::<u32>::parse))?.into_iter()
         .map( |matrix| {
@@ -116,9 +116,23 @@ mod test {
     const OUTPUT1: &str = "405";
 
     const INPUT2: &str = indoc! {"
-    
+        #.##..##.
+        ..#.##.#.
+        ##......#
+        ##......#
+        ..#.##.#.
+        ..##..##.
+        #.#.##.#.
+        
+        #...##..#
+        #....#..#
+        ..##..###
+        #####.##.
+        #####.##.
+        ..##..###
+        #....#..#
     "};
-    const OUTPUT2: &str = "";
+    const OUTPUT2: &str = "400";
 
     #[test]
     fn test1() {
