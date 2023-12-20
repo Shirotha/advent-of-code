@@ -1,4 +1,8 @@
-use std::borrow::Cow;
+use std::{
+    borrow::Cow,
+    collections::hash_map::Entry
+};
+use bit_vec::BitVec;
 use ndarray::prelude::*;
 use nom::IResult;
 use tap::Pipe;
@@ -31,6 +35,7 @@ enum Dir {
     E
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct Platform(Array2<Tile>);
 impl Platform {
     fn parse(input: &str) -> IResult<&str, Self> {
@@ -146,17 +151,39 @@ impl Platform {
             )
             .sum::<usize>()
     }
-    // FIXME: cycle will produce a cyclic load, not a steady state
     #[inline]
-    fn steady_state_load(&mut self, infinity: usize) -> usize {
-        let mut last = self.load();
-        for _ in 0..infinity {
-            self.cycle();
-            let load = self.load();
-            if load == last { return load; }
-            last = load;
+    fn is_round(&self) -> BitVec {
+        let (w, h) = self.0.dim();
+        let mut round = BitVec::from_elem(w * h, false);
+        for y in 0..h {
+            for x in 0..w {
+                if self.0[[x, y]] == Tile::Round {
+                    round.set(y * w + x, true);
+                }
+            }
         }
-        last
+        round
+    }
+    #[inline]
+    fn stabilized_load(&mut self, count: usize) -> usize {
+        let mut visited = HashMap::new();
+        visited.insert(self.is_round(), 0);
+        for i in 1..=count {
+            self.cycle();
+            let round = self.is_round();
+            match visited.entry(round) {
+                Entry::Occupied(e) => {
+                    let period = i - e.get();
+                    let remaining = (count - i) % period;
+                    for _ in 0..remaining {
+                        self.cycle();
+                    }
+                    return self.load();
+                },
+                Entry::Vacant(e) => _ = e.insert(i)
+            }
+        }
+        self.load()
     }
 }
 
@@ -172,7 +199,7 @@ pub fn part1(input: &str) -> Answer {
 pub fn part2(input: &str) -> Answer {
     parse(input, Platform::parse)?
         .pipe( |mut platform| {
-            platform.steady_state_load(1_00/*0_000_000*/)
+            platform.stabilized_load(1_000_000_000)
         } )
         .pipe( |result| Ok(Cow::Owned(result.to_string())) )
 }
