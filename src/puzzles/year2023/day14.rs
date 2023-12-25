@@ -39,36 +39,8 @@ enum Dir {
 struct Platform(Array2<Tile>);
 impl Platform {
     fn parse(input: &str) -> IResult<&str, Self> {
-        let mut buffer = Vec::new();
-        let (mut current, mut width, mut height) = (0, None, 0);
-        for chr in input.chars() {
-            match chr {
-                '\n' => {
-                    if let Some(width) = width {
-                        if width != current {
-                            break;
-                        }
-                    } else {
-                        width = Some(current);
-                    }
-                    current = 0;
-                    height += 1;
-                }
-                '\r' => (),
-                _ => {
-                    buffer.push(Tile::from_char(chr));
-                    current += 1;
-                }
-            }
-        }
-        let width = width.unwrap();
-        if current == width {
-            height += 1;
-        }
-        let len = width * height;
-        buffer.resize(len, Tile::Empty);
-        let data = Array2::from_shape_vec((width, height).f(), buffer).unwrap();
-        Ok(("", Self(data)))
+        let (input, data) = grid(input, Tile::from_char)?;
+        Ok((input, Self(data)))
     }
     fn tilt(&mut self, dir: Dir) {
         #[inline(always)]
