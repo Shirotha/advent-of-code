@@ -11,6 +11,7 @@
 #![feature(allocator_api)]
 #![feature(alloc_layout_extra)]
 #![feature(non_null_convenience)]
+#![feature(get_many_mut)]
 
 pub mod puzzles;
 mod parse;

@@ -15,7 +15,7 @@ impl<T: Node> T {
 }
 
 #[derive(Debug)]
-pub struct Pool<T: Node, A: Allocator> {
+pub struct Pool<T: Node, A: Allocator = Global> {
     head: Ref<T>,
     allocator: A,
     layout: Layout,
