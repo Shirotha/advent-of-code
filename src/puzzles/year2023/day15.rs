@@ -1,4 +1,4 @@
-use std::borrow::Cow;
+use std::{borrow::Cow, collections::LinkedList};
 use nom::{
     IResult,
     character::complete::{char, alpha1, digit1},
@@ -11,7 +11,7 @@ use nom::{
 use rayon::prelude::*;
 use tap::Pipe;
 
-use crate::{*, parse::*, collections::nodes::*};
+use crate::{*, parse::*};
 
 #[inline(always)]
 const fn hash_byte(input: u8, byte: u8) -> u8 {
@@ -92,39 +92,36 @@ impl<'a> Command<'a> {
         }
     }
     fn run(cmds: &[Self]) -> usize {
-        node!{ Lens<'a>((&'a str, u8), Link1<Lens<'a>>) { ("", 0) } };
-        let mut boxes: [Ref<Lens>; 256] = [None; 256];
-        let mut pool = Pool::new().expect("proper pool layout");
+        let mut boxes = vec![LinkedList::<(&'a str, u8)>::new(); 256];
         'outer: for cmd in cmds {
             match cmd {
                 Self::Remove(label) => {
-                    let mut cursor = boxes[label.hash(0) as usize].cursor();
+                    let mut cursor = boxes[label.hash(0) as usize].cursor_front_mut();
                     while let Some(node) = cursor.current() {
-                        if node.data.0 == *label {
-                            cursor.remove(0, &mut pool);
+                        if node.0 == *label {
+                            cursor.remove_current();
                             continue 'outer;
                         }
-                        cursor.move_link(0);
+                        cursor.move_next();
                     }
                 },
                 Self::Set(label, value) => {
-                    let mut cursor = boxes[label.hash(0) as usize].cursor();
-                    while let Some(node) = cursor.current_mut() {
-                        if node.data.0 == *label {
-                            node.data.1 = *value;
+                    let mut cursor = boxes[label.hash(0) as usize].cursor_front_mut();
+                    while let Some(node) = cursor.current() {
+                        if node.0 == *label {
+                            node.1 = *value;
                             continue 'outer;
                         }
-                        cursor.move_link(0);
+                        cursor.move_next();
                     }
-                    let node = cursor.insert(0, &mut pool).expect("valid new node");
-                    node.data = (*label, *value);
+                    cursor.insert_before((*label, *value));
                 }
             }
         }
         let mut result = 0;
         for (i, r#box) in boxes.into_iter().enumerate() {
-            for (j, node) in r#box.iter_link(0).enumerate() {
-                result += (i + 1) * (j + 1) * node.data.1 as usize;
+            for (j, (_, value)) in r#box.into_iter().enumerate() {
+                result += (i + 1) * (j + 1) * value as usize;
             }
         }
         result

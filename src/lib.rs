@@ -12,11 +12,11 @@
 #![feature(alloc_layout_extra)]
 #![feature(non_null_convenience)]
 #![feature(get_many_mut)]
+#![feature(linked_list_cursors)]
 
 pub mod puzzles;
 mod parse;
 mod iter;
-mod collections;
 
 use std::{
     borrow::Cow,
