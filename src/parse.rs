@@ -81,44 +81,46 @@ where
     }
 }
 
-pub fn grid<T, F>(mut input: &str, mut f: F) -> IResult<&str, Array2<T>>
+pub fn grid<T, F>(f: &mut F) -> impl '_ + FnMut(&str) -> IResult<&str, Array2<T>>
     where F: FnMut(char) -> T
 {
-    let mut buffer = Vec::new();
-    let (mut current, mut width, mut height, mut last) = (0, None, 0, 0);
-    for (i, chr) in input.chars().enumerate() {
-        match chr {
-            '\n' => {
-                if let Some(width) = width {
-                    if width != current {
-                        break;
+    |mut input: &str| {
+        let mut buffer = Vec::new();
+        let (mut current, mut width, mut height, mut last) = (0, None, 0, 0);
+        for (i, chr) in input.chars().enumerate() {
+            match chr {
+                '\n' => {
+                    if let Some(width) = width {
+                        if width != current {
+                            break;
+                        }
+                    } else {
+                        width = Some(current);
                     }
-                } else {
-                    width = Some(current);
+                    current = 0;
+                    height += 1;
+                    last = i;
                 }
-                current = 0;
-                height += 1;
-                last = i;
-            }
-            '\r' => (),
-            _ => {
-                buffer.push(f(chr));
-                current += 1;
+                '\r' => (),
+                _ => {
+                    buffer.push(f(chr));
+                    current += 1;
+                }
             }
         }
+        let width = width.unwrap_or(current);
+        if width == 0 {
+            return Err(nom::Err::Incomplete(nom::Needed::Unknown));
+        }
+        if current == width {
+            height += 1;
+            input = "";
+        } else {
+            input = &input[last..];
+        }
+        let len = width * height;
+        buffer.truncate(len);
+        let data = Array2::from_shape_vec((width, height).f(), buffer).unwrap();
+        Ok((input, data))
     }
-    let width = width.unwrap_or(current);
-    if width == 0 {
-        return Err(nom::Err::Incomplete(nom::Needed::Unknown));
-    }
-    if current == width {
-        height += 1;
-        input = "";
-    } else {
-        input = &input[last..];
-    }
-    let len = width * height;
-    buffer.truncate(len);
-    let data = Array2::from_shape_vec((width, height).f(), buffer).unwrap();
-    Ok((input, data))
 }

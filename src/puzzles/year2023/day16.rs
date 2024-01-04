@@ -3,7 +3,7 @@ use std::{
     collections::{VecDeque, HashSet}
 };
 use bit_vec::BitVec;
-use nom::IResult;
+use ndarray::Array2;
 use petgraph::{
     graph::DiGraph,
     visit::{GraphBase, depth_first_search, DfsEvent}
@@ -116,13 +116,12 @@ impl RayCast {
 type Pos = [usize; 2];
 type Graph = DiGraph<(Pos, Tile), (Dir, u8), u16>;
 
-fn parse_graph(input: &str) -> IResult<&str, (Graph, <Graph as GraphBase>::NodeId, Pos)> {
-    let (input, grid) = grid(input, Tile::from_char)?;
+fn parse_graph(grid: &Array2<Tile>, pos: Pos, dir: Dir) -> (Graph, <Graph as GraphBase>::NodeId, Pos) {
     let mut graph = Graph::default();
-    let root = graph.add_node(([0, 0], grid[[0, 0]]));
+    let root = graph.add_node((pos, grid[pos]));
     let mut open = VecDeque::new();
     let mut closed = HashSet::new();
-    open.push_back((root, RayCast([0, 0], Dir::E, 0)));
+    open.push_back((root, RayCast(pos, dir, 0)));
     let max = {
         let dim = grid.dim();
         [dim.0 - 1, dim.1 - 1]
@@ -156,40 +155,74 @@ fn parse_graph(input: &str) -> IResult<&str, (Graph, <Graph as GraphBase>::NodeI
             }
         }
     }
-    Ok((input, (graph, root, [max[0] + 1, max[1] + 1])))
+    (graph, root, [max[0] + 1, max[1] + 1])
 }
- 
-pub fn part1(input: &str) -> Answer {
-    parse(input, parse_graph)?
-        .pipe( |(graph, root, [w, h])| {
-            let mut grid = BitVec::from_elem(w * h, false);
-            depth_first_search(&graph, [root], |event| {
-                match event {
-                    DfsEvent::Discover(node, _) => {
-                        let ([x, y], _) = graph[node];
-                        grid.set(y * w + x, true);
-                    },
-                    DfsEvent::TreeEdge(a, b) => {
-                        let (pos, _) = graph[a];
-                        let edge = graph.find_edge(a, b).unwrap();
-                        let (dir, len) = graph[edge];
-                        let mut raycast = RayCast::try_from(pos, dir, [w, h]).unwrap();
-                        for _ in 0..len {
-                            let [x, y] = raycast.0;
-                            grid.set(y * w + x, true);
-                            raycast.step([w, h]);
-                        }
-                    },
-                    _ => ()
+
+fn count_energy(graph: &Graph, root: <Graph as GraphBase>::NodeId, [w, h]: Pos) -> usize {
+    let mut grid = BitVec::from_elem(w * h, false);
+    depth_first_search(&graph, [root], |event| {
+        match event {
+            DfsEvent::Discover(node, _) => {
+                let ([x, y], _) = graph[node];
+                grid.set(y * w + x, true);
+            },
+            DfsEvent::TreeEdge(a, b) => {
+                let (pos, _) = graph[a];
+                let edge = graph.find_edge(a, b).unwrap();
+                let (dir, len) = graph[edge];
+                let mut raycast = RayCast::try_from(pos, dir, [w, h]).unwrap();
+                for _ in 0..len {
+                    let [x, y] = raycast.0;
+                    grid.set(y * w + x, true);
+                    raycast.step([w, h]);
                 }
-            } );
-            grid.into_iter().filter( |x| *x ).count()
+            },
+            _ => ()
+        }
+    } );
+    grid.into_iter().filter( |x| *x ).count()
+}
+
+pub fn part1(input: &str) -> Answer {
+    let grid = parse(input, grid(&mut Tile::from_char))?;
+    parse_graph(&grid, [0, 0], Dir::E)
+        .pipe( |(graph, root, size)| {
+            count_energy(&graph, root, size)
         } )
         .pipe( |result| Ok(Cow::Owned(result.to_string())) )
 }
 
 pub fn part2(input: &str) -> Answer {
-    todo!()
+    let grid = parse(input, grid(&mut Tile::from_char))?;
+    let inner = |pos, dir| {
+        parse_graph(&grid, pos, dir)
+            .pipe( |(graph, root, size)| {
+                count_energy(&graph, root, size)
+            } )
+    };
+    let (w, h) = grid.dim();
+    let mut max = 0;
+    for x in 0..w {
+        let count = inner([x, 0], Dir::S);
+        if count > max {
+            max = count;
+        }
+        let count = inner([x, h - 1], Dir::N);
+        if count > max {
+            max = count;
+        }
+    }
+    for y in 0..h {
+        let count = inner([0, y], Dir::E);
+        if count > max {
+            max = count;
+        }
+        let count = inner([w - 1, y], Dir::W);
+        if count > max {
+            max = count;
+        }
+    }
+    Ok(Cow::Owned(max.to_string()))
 }
 
 inventory::submit! { Puzzle::new(2023, 16, 1, part1) }
