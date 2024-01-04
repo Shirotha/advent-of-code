@@ -1,11 +1,18 @@
-use std::{borrow::Cow, collections::VecDeque, ptr::NonNull};
+use std::{
+    borrow::Cow,
+    collections::{VecDeque, HashSet}
+};
+use bit_vec::BitVec;
 use nom::IResult;
-use smallvec::SmallVec;
+use petgraph::{
+    graph::DiGraph,
+    visit::{GraphBase, depth_first_search, DfsEvent}
+};
 use tap::Pipe;
 
-use crate::{*, parse::*, collections::nodes::*};
+use crate::{*, parse::*};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Dir {
     E,
     N,
@@ -13,7 +20,7 @@ enum Dir {
     S
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Splitter {
     Horizontal,
     Vertical
@@ -22,13 +29,13 @@ impl Splitter {
     #[inline]
     fn split(&self, dir: Dir) -> Option<[Dir; 2]> {
         match self {
-            Self::Horizontal => if matches!(dir, Dir::N | Dir::S) { Some([Dir::N, Dir::S]) } else { None }
-            Self::Vertical => if matches!(dir, Dir::E | Dir::W) { Some([Dir::E, Dir::W]) } else { None }
+            Self::Horizontal => if matches!(dir, Dir::N | Dir::S) { Some([Dir::E, Dir::W]) } else { None }
+            Self::Vertical => if matches!(dir, Dir::E | Dir::W) { Some([Dir::N, Dir::S]) } else { None }
         }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Mirror {
     A,
     B
@@ -37,15 +44,15 @@ impl Mirror {
     #[inline]
     fn reflect(&self, dir: Dir) -> Dir {
         match dir {
-            Dir::E => if *self == Mirror::A { Dir::S } else { Dir::N },
-            Dir::N => if *self == Mirror::A { Dir::W } else { Dir::E },
-            Dir::W => if *self == Mirror::A { Dir::N } else { Dir::S },
-            Dir::S => if *self == Mirror::A { Dir::E } else { Dir::W }
+            Dir::E => if *self == Mirror::A { Dir::N } else { Dir::S },
+            Dir::N => if *self == Mirror::A { Dir::E } else { Dir::W },
+            Dir::W => if *self == Mirror::A { Dir::S } else { Dir::N },
+            Dir::S => if *self == Mirror::A { Dir::W } else { Dir::E }
         }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Tile {
     Empty,
     Splitter(Splitter),
@@ -63,120 +70,120 @@ impl Tile {
             _ => panic!()
         }
     }
+    
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RayCast(Pos, Dir, u8);
+impl RayCast {
+    #[inline]
+    fn step(&mut self, max: Pos) -> bool {
+        match self.1 {
+            Dir::E if self.0[0] != max[0] => {
+                self.0[0] += 1;
+                self.2 += 1;
+                true
+            },
+            Dir::N if self.0[1] != 0 => {
+                self.0[1] -= 1;
+                self.2 += 1;
+                true
+            },
+            Dir::W if self.0[0] != 0 => {
+                self.0[0] -= 1;
+                self.2 += 1;
+                true
+            }
+            Dir::S if self.0[1] != max[1] => {
+                self.0[1] += 1;
+                self.2 += 1;
+                true
+            },
+            _ => false
+        }
+    }
+    #[inline]
+    fn try_from(pos: Pos, dir: Dir, max: Pos) -> Option<Self> {
+        let mut out = RayCast(pos, dir, 0);
+        if out.step(max) {
+            Some(out)
+        } else {
+            None
+        }
+    }
 }
 
 type Pos = [usize; 2];
+type Graph = DiGraph<(Pos, Tile), (Dir, u8), u16>;
 
-node! {
-    Optic(
-        (Tile, Pos),
-        LinkWrapper<Optic, SmallVec<[Ref<Optic>; 2]>>
-    ) {
-        (Tile::Empty, [0, 0])
-    }
-}
-impl Optic {
-    fn parse_graph(pool: &mut Pool<Self>) -> impl FnMut(&str) -> IResult<&str, NonNull<Self>> + '_ {
-        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-        struct RayCast(Pos, Dir);
-        impl RayCast {
-            #[inline]
-            fn step(&mut self, max: Pos) -> bool {
-                match self.1 {
-                    Dir::E if self.0[0] != max[0] => {
-                        self.0[0] += 1;
-                        true
-                    },
-                    Dir::N if self.0[1] != 0 => {
-                        self.0[1] -= 1;
-                        true
-                    },
-                    Dir::W if self.0[0] != 0 => {
-                        self.0[0] -= 1;
-                        true
-                    }
-                    Dir::S if self.0[1] != max[1] => {
-                        self.0[1] += 1;
-                        true
-                    },
-                    _ => false
+fn parse_graph(input: &str) -> IResult<&str, (Graph, <Graph as GraphBase>::NodeId, Pos)> {
+    let (input, grid) = grid(input, Tile::from_char)?;
+    let mut graph = Graph::default();
+    let root = graph.add_node(([0, 0], grid[[0, 0]]));
+    let mut open = VecDeque::new();
+    let mut closed = HashSet::new();
+    open.push_back((root, RayCast([0, 0], Dir::E, 0)));
+    let max = {
+        let dim = grid.dim();
+        [dim.0 - 1, dim.1 - 1]
+    };
+    while let Some((parent, mut raycast)) = open.pop_back() {
+        while grid[raycast.0] == Tile::Empty && raycast.step(max) {}
+        let (pos, dir, tile) = (raycast.0, raycast.1, grid[raycast.0]);
+        if closed.contains(&(pos, dir)) { continue; }
+        closed.insert((pos, dir));
+        let node = graph.add_node((pos, tile));
+        graph.add_edge(parent, node, (dir, raycast.2));
+        match tile {
+            Tile::Empty => (),
+            Tile::Mirror(mirror) => {
+                let dir = mirror.reflect(dir);
+                if let Some(out) = RayCast::try_from(pos, dir, max) {
+                    open.push_back((node, out));
                 }
-            }
-            #[inline]
-            fn try_from(pos: Pos, dir: Dir, max: Pos) -> Option<Self> {
-                let mut out = RayCast(pos, dir);
-                if out.step(max) {
-                    Some(out)
-                } else {
-                    None
+            },
+            Tile::Splitter(splitter) => {
+                if let Some([a, b]) = splitter.split(dir) {
+                    if let Some(out) = RayCast::try_from(pos, a, max) {
+                        open.push_back((node, out));
+                    }
+                    if let Some(out) = RayCast::try_from(pos, b, max) {
+                        open.push_back((node, out));
+                    }
+                } else if let Some(out) = RayCast::try_from(pos, dir, max) {
+                    open.push_back((node, out));
                 }
             }
         }
-
-        |input| {
-            let mut node = |pos: Pos, tile: Tile| {
-                let mut ptr = pool.get().expect("valid new node");
-                let node = unsafe { ptr.as_mut() };
-                node.data = (tile, pos);
-                match tile {
-                    Tile::Empty if pos == [0, 0] => {
-                        node.link.push(None);
+    }
+    Ok((input, (graph, root, [max[0] + 1, max[1] + 1])))
+}
+ 
+pub fn part1(input: &str) -> Answer {
+    parse(input, parse_graph)?
+        .pipe( |(graph, root, [w, h])| {
+            let mut grid = BitVec::from_elem(w * h, false);
+            depth_first_search(&graph, [root], |event| {
+                match event {
+                    DfsEvent::Discover(node, _) => {
+                        let ([x, y], _) = graph[node];
+                        grid.set(y * w + x, true);
                     },
-                    Tile::Mirror(_) => {
-                        node.link.push(None);
-                    },
-                    Tile::Splitter(_) => {
-                        node.link.push(None);
-                        node.link.push(None);
+                    DfsEvent::TreeEdge(a, b) => {
+                        let (pos, _) = graph[a];
+                        let edge = graph.find_edge(a, b).unwrap();
+                        let (dir, len) = graph[edge];
+                        let mut raycast = RayCast::try_from(pos, dir, [w, h]).unwrap();
+                        for _ in 0..len {
+                            let [x, y] = raycast.0;
+                            grid.set(y * w + x, true);
+                            raycast.step([w, h]);
+                        }
                     },
                     _ => ()
                 }
-                ptr
-            };
-            let (input, grid) = grid(input, Tile::from_char)?;
-            let mut open = VecDeque::new();
-            let mut root = Some(node([0, 0], Tile::Empty));
-            open.push_back((&mut root, RayCast([0, 0], Dir::E)));
-            let max = {
-                let dim = grid.dim();
-                [dim.0 - 1, dim.1 - 1]
-            };
-            while let Some((ptr, mut raycast)) = open.pop_back() {
-                while grid[raycast.0] == Tile::Empty && raycast.step(max) {}
-                let (pos, tile) = (raycast.0, grid[raycast.0]);
-                let mut next = node(pos, tile);
-                let node = unsafe { next.as_mut() };
-                match tile {
-                    Tile::Empty => (),
-                    Tile::Mirror(mirror) => if let Some(out) = RayCast::try_from(pos, mirror.reflect(raycast.1), max) {
-                        open.push_back((&mut node.link[0], out));
-                    },
-                    Tile::Splitter(splitter) => {
-                        if let Some([a, b]) = splitter.split(raycast.1) {
-                            let [l1, l2] = node.link.get_many_mut([0, 1]).unwrap();
-                            if let Some(out) = RayCast::try_from(pos, a, max) {
-                                open.push_back((l1, out));
-                            }
-                            if let Some(out) = RayCast::try_from(pos, b, max) {
-                                open.push_back((l2, out));
-                            }
-                        } else if let Some(out) = RayCast::try_from(pos, raycast.1, max) {
-                            open.push_back((&mut node.link[0], out));
-                        }
-                    }
-                }
-                *ptr = Some(next);
-            }
-            Ok((input, root.unwrap()))
-        }
-    }
-}
-
-pub fn part1(input: &str) -> Answer {
-    let mut pool = Pool::new().expect("valid pool");
-    parse(input, Optic::parse_graph(&mut pool))?
-        .pipe( |root| {
-            0
+            } );
+            grid.into_iter().filter( |x| *x ).count()
         } )
         .pipe( |result| Ok(Cow::Owned(result.to_string())) )
 }
@@ -205,12 +212,21 @@ mod test {
         .|....-|.\
         ..//.|....
     "#};
-    const OUTPUT1: &str = "";
+    const OUTPUT1: &str = "46";
 
-    const INPUT2: &str = indoc! {"
-    
-    "};
-    const OUTPUT2: &str = "";
+    const INPUT2: &str = indoc! {r#"
+        .|...\....
+        |.-.\.....
+        .....|-...
+        ........|.
+        ..........
+        .........\
+        ..../.\\..
+        .-.-/..|..
+        .|....-|.\
+        ..//.|....
+    "#};
+    const OUTPUT2: &str = "51";
 
     #[test]
     fn test1() {
