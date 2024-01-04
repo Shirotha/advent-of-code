@@ -24,7 +24,8 @@ clap = { version = "4.4.10", features = ["derive"] }
 bit-vec = "0.6.3"
 #partial-borrow = "1.0.1"
 easy-ext = "1.0.1"
-cc-traits = "2.0.0"
+cc-traits = { version = "2.0.0", features = ["std", "smallvec"] }
+petgraph = "0.6.4"
 
 [dev-dependencies]
 divan = "0.1.3"

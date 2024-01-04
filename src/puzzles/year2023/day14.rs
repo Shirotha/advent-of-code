@@ -39,7 +39,7 @@ enum Dir {
 struct Platform(Array2<Tile>);
 impl Platform {
     fn parse(input: &str) -> IResult<&str, Self> {
-        let (input, data) = grid(input, Tile::from_char)?;
+        let (input, data) = grid(&mut Tile::from_char)(input)?;
         Ok((input, Self(data)))
     }
     fn tilt(&mut self, dir: Dir) {
