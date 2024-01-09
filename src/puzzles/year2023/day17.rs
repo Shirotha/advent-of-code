@@ -3,7 +3,8 @@ use std::{
     ops::Add,
     hash::Hash,
     collections::HashSet,
-    cmp::Reverse, mem::transmute
+    cmp::Reverse,
+    mem::transmute
 };
 use keyed_priority_queue::{KeyedPriorityQueue, Entry};
 use num_traits::Zero;
@@ -11,7 +12,7 @@ use num_traits::Zero;
 use crate::{*, parse::*};
 
 fn astar<T, X, S, N, NR, H, G>(start: S, mut neighbours: N, mut heuristic: H, mut goal: G)
-    -> Option<(X, Vec<T>)>
+    -> Option<X>
 where
     T: Copy + Eq + Hash,
     X: Copy + Ord + Add<X, Output = X> + Zero,
@@ -23,20 +24,12 @@ where
 {
     let mut front = KeyedPriorityQueue::new();
     let mut closed = HashSet::new();
-    let mut parent = HashMap::new();
     for t in start {
         front.push(t, Reverse((heuristic(t), X::zero())));
     }
-    while let Some((mut t, Reverse((_, g)))) = front.pop() {
+    while let Some((t, Reverse((_, g)))) = front.pop() {
         if goal(t) {
-            let mut path = Vec::new();
-            path.push(t);
-            while let Some(p) = parent.get(&t) {
-                t = *p;
-                path.push(t);
-            }
-            path.reverse();
-            return Some((g, path))
+            return Some(g);
         }
         closed.insert(t);
         for (n, c) in neighbours(t).into_iter()
@@ -45,14 +38,10 @@ where
             let g = g + c;
             let p = Reverse((g + heuristic(n), g));
             match front.entry(n) {
-                Entry::Vacant(e) => {
-                    e.set_priority(p);
-                    parent.insert(n, t);
-                }
-                Entry::Occupied(e) if *e.get_priority() < p => {
-                    _ = e.set_priority(p);
-                    parent.insert(n, t);
-                }
+                Entry::Vacant(e) =>
+                    e.set_priority(p),
+                Entry::Occupied(e) if *e.get_priority() < p =>
+                    _ = e.set_priority(p),
                 _ => ()
             }
         }
@@ -88,8 +77,8 @@ enum ValidResult {
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
-struct History<const N: u8>(Dir, u8);
-impl<const N: u8> History<N> {
+struct Constraint<const MIN: u8, const MAX: u8>(Dir, u8);
+impl<const MIN: u8, const MAX: u8> Constraint<MIN, MAX> {
     #[inline]
     fn valid(&self, dir: Dir) -> ValidResult {
         if self.0 == Dir::Unknown {
@@ -103,58 +92,74 @@ impl<const N: u8> History<N> {
         }
         ValidResult::Invalid
     }
+    #[inline(always)]
+    fn can_stop(&self) -> bool {
+        self.1 >= MIN
+    }
     #[inline]
-    fn concat(self, rhs: Dir) -> Option<Self> {
-        match self.valid(rhs) {
-            ValidResult::Straight =>
-                if self.1 != N {
-                    Some(Self(self.0, self.1 + 1))
-                } else { None },
-                ValidResult::First | ValidResult::Turn => Some(Self(rhs, 1)),
-                ValidResult::Invalid => None
+    fn concat(self, dir: Dir) -> Option<Self> {
+        match self.valid(dir) {
+            ValidResult::Straight if self.1 != MAX => Some(Self(self.0, self.1 + 1)),
+            ValidResult::Straight => None,
+            ValidResult::Turn if self.1 < MIN => None,
+            ValidResult::First | ValidResult::Turn => Some(Self(dir, 1)),
+            ValidResult::Invalid => None
         }
     }
 }
 
-type Node = ([usize; 2], History<3>);
-
 pub fn part1(input: &str) -> Answer {
+    type Node = ([usize; 2], Constraint<0, 3>);
     let grid = parse(input, grid(&mut |c| c as u8 - b'0' ))?;
     let (w, h) = grid.dim();
     let node = #[inline]
-        |(i, h): Node, dir: Dir|
-            h.concat(dir).and_then( |h| 
+        |(i, c): Node, dir: Dir|
+            c.concat(dir).and_then( |h| 
                 grid.get(i).map( |x| ((i, h), *x as u16) )
             );
     let neighbours = #[inline]
-        |([x, y], h): Node|
-            node(([x.wrapping_sub(1), y], h), Dir::W).into_iter()
-                .chain(node(([x, y.wrapping_sub(1)], h), Dir::N))
-                .chain(node(([x + 1, y], h), Dir::E))
-                .chain(node(([x, y + 1], h), Dir::S));
+        |([x, y], c): Node|
+            node(([x.wrapping_sub(1), y], c), Dir::W).into_iter()
+                .chain(node(([x, y.wrapping_sub(1)], c), Dir::N))
+                .chain(node(([x + 1, y], c), Dir::E))
+                .chain(node(([x, y + 1], c), Dir::S));
     let heuristic = #[inline]
         |([x, y], _): Node|
             ((w - x - 1) + (h - y - 1)) as u16;
     let goal = #[inline]
         |(i, _): Node|
             i == [w - 1, h - 1];
-    let (cost, path) = astar([([0, 0], History::default())], neighbours, heuristic, goal)
+    let start = [([0, 0], Constraint::default())];
+    let result = astar(start, neighbours, heuristic, goal)
         .expect("valid path");
-    for (_, h) in path {
-        print!("{}", match h.0 {
-            Dir::E => "E",
-            Dir::N => "N",
-            Dir::W => "W",
-            Dir::S => "S",
-            _ => "?",
-        });
-    }
-    println!();
-    Ok(Cow::Owned(cost.to_string()))
+    Ok(Cow::Owned(result.to_string()))
 }
-
+// 1310 too low, 1327 too high
 pub fn part2(input: &str) -> Answer {
-    todo!()
+    type Node = ([usize; 2], Constraint<4, 10>);
+    let grid = parse(input, grid(&mut |c| c as u8 - b'0' ))?;
+    let (w, h) = grid.dim();
+    let node = #[inline]
+        |(i, h): Node, dir: Dir|
+            h.concat(dir).and_then( |c| 
+                grid.get(i).map( |x| ((i, c), *x as u16) )
+            );
+    let neighbours = #[inline]
+        |([x, y], c): Node|
+            node(([x.wrapping_sub(1), y], c), Dir::W).into_iter()
+                .chain(node(([x, y.wrapping_sub(1)], c), Dir::N))
+                .chain(node(([x + 1, y], c), Dir::E))
+                .chain(node(([x, y + 1], c), Dir::S));
+    let heuristic = #[inline]
+        |([x, y], _): Node|
+            ((w - x - 1) + (h - y - 1)) as u16;
+    let goal = #[inline]
+        |(i, c): Node|
+            i == [w - 1, h - 1] && c.can_stop();
+    let start = [([0, 0], Constraint::default())];
+    let result = astar(start, neighbours, heuristic, goal)
+        .expect("valid path");
+    Ok(Cow::Owned(result.to_string()))
 }
 
 inventory::submit! { Puzzle::new(2023, 17, 1, part1) }
@@ -183,9 +188,13 @@ mod test {
     const OUTPUT1: &str = "102";
 
     const INPUT2: &str = indoc! {"
-    
+        111111111111
+        999999999991
+        999999999991
+        999999999991
+        999999999991
     "};
-    const OUTPUT2: &str = "";
+    const OUTPUT2: &str = "71";
 
     #[test]
     fn test1() {
