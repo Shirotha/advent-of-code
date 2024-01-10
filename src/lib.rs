@@ -1,10 +1,30 @@
 #![feature(iterator_try_collect)]
+#![feature(float_next_up_down)]
+#![feature(portable_simd)]
+#![feature(const_option)]
+#![feature(maybe_uninit_uninit_array)]
+#![feature(maybe_uninit_array_assume_init)]
+#![feature(const_trait_impl)]
+#![feature(type_alias_impl_trait)]
+#![feature(stmt_expr_attributes)]
+#![feature(array_windows)]
+#![feature(allocator_api)]
+#![feature(alloc_layout_extra)]
+#![feature(non_null_convenience)]
+#![feature(get_many_mut)]
+#![feature(linked_list_cursors)]
 
 pub mod collections;
 pub mod puzzles;
 mod parse;
+mod iter;
 
-use std::{borrow::Cow, collections::HashMap};
+use std::{
+    borrow::Cow,
+    collections::HashMap,
+};
+#[allow(unused_imports)]
+use std::ops::{Deref, DerefMut};
 use thiserror::Error;
 use miette::Diagnostic;
 
@@ -46,5 +66,43 @@ impl Puzzle {
 }
 
 pub type Puzzles<'a> = HashMap<u16, HashMap<u8, HashMap<u8, &'a Puzzle>>>;
+
+#[allow(unused_macros)]
+macro_rules! alias {
+    { $name:ident = $rhs:ty } => {
+        struct $name($rhs);
+        impl const From<$rhs> for $name {
+            #[inline(always)]
+            fn from(value: $rhs) -> Self { $name(value) }
+        }
+        impl const Deref for $name {
+            type Target = $rhs;
+            #[inline(always)]
+            fn deref(&self) -> &Self::Target { &self.0 }
+        }
+        impl const DerefMut for $name {
+            #[inline(always)]
+            fn deref_mut(&mut self) -> &mut Self::Target { &mut self.0 }
+        }
+    };
+    { $name:ident < $( $params:tt ),+ > = $rhs:ty } => {
+        struct $name< $( $params ),* >($rhs);
+        impl< $( $params ),* > const From<$rhs> for $name< $( $params ),* > {
+            #[inline(always)]
+            fn from(value: $rhs) -> Self { $name(value) }
+        }
+        impl< $( $params ),* > const Deref for $name< $( $params ),* > {
+            type Target = $rhs;
+            #[inline(always)]
+            fn deref(&self) -> &Self::Target { &self.0 }
+        }
+        impl< $( $params ),* > const DerefMut for $name< $( $params ),* > {
+            #[inline(always)]
+            fn deref_mut(&mut self) -> &mut Self::Target { &mut self.0 }
+        }
+    }
+}
+#[allow(unused_imports)]
+pub(crate) use alias;
 
 inventory::collect!(Puzzle);

@@ -215,7 +215,7 @@ mod test {
     "};
     const OUTPUT1: &str = "4361";
 
-    const INPUT2: &str = indoc!{"
+    const INPUT2: &str = indoc! {"
         467..114..
         ...*......
         ..35..633.
