@@ -14,8 +14,8 @@
 #![feature(get_many_mut)]
 #![feature(linked_list_cursors)]
 
-pub mod collections;
 pub mod puzzles;
+mod collections;
 mod parse;
 mod iter;
 
