@@ -13,6 +13,10 @@
 #![feature(non_null_convenience)]
 #![feature(get_many_mut)]
 #![feature(linked_list_cursors)]
+#![feature(try_blocks)]
+#![feature(try_trait_v2)]
+#![feature(never_type)]
+#![feature(never_type_fallback)]
 
 pub mod puzzles;
 mod collections;
@@ -22,9 +26,11 @@ mod iter;
 use std::{
     borrow::Cow,
     collections::HashMap,
+    ops::{Try, FromResidual, ControlFlow},
+    fmt::Debug,
+    convert::Infallible, marker::PhantomData
 };
 #[allow(unused_imports)]
-use std::ops::{Deref, DerefMut};
 use thiserror::Error;
 use miette::Diagnostic;
 
@@ -66,6 +72,74 @@ impl Puzzle {
 }
 
 pub type Puzzles<'a> = HashMap<u16, HashMap<u8, HashMap<u8, &'a Puzzle>>>;
+
+pub struct DeferUnwrap<T>(T);
+impl<T, R> FromResidual<R> for DeferUnwrap<T> {
+    #[inline(always)]
+    fn from_residual(_residual: R) -> Self {
+        panic!()
+    }
+}
+impl<T> Try for DeferUnwrap<T> {
+    type Output = T;
+    type Residual = Option<Infallible>;
+    #[inline(always)]
+    fn from_output(output: Self::Output) -> Self {
+        Self(output)
+    }
+    #[inline]
+    fn branch(self) -> ControlFlow<Self::Residual, Self::Output> {
+        ControlFlow::Continue(self.0)
+    }
+}
+macro_rules! unwrap {
+    { $t:ty : $expr:expr } => { {
+        let result: crate::DeferUnwrap< $t > = try { $expr };
+        result.0
+    } }
+}
+pub(crate) use unwrap;
+
+pub struct DeferDiscard(bool);
+impl<R> FromResidual<R> for DeferDiscard {
+    #[inline(always)]
+    fn from_residual(_residual: R) -> Self {
+        Self(false)
+    }
+}
+impl Try for DeferDiscard {
+    type Output = ();
+    type Residual = ();
+    #[inline(always)]
+    fn from_output(_output: Self::Output) -> Self {
+        Self(true)
+    }
+    #[inline]
+    fn branch(self) -> ControlFlow<Self::Residual, Self::Output> {
+        if self.0 {
+            ControlFlow::Continue(())
+        } else {
+            ControlFlow::Break(())
+        }
+    }
+}
+macro_rules! discard {
+    { $expr:expr } => { {
+        let result: crate::DeferDiscard = try { $expr };
+        result.0
+    } }
+}
+pub(crate) use discard;
+
+#[allow(unused_macros)]
+macro_rules! option {
+    { $t:ty : $expr:expr } => { {
+        let result: Option< $t > = try { $expr };
+        result
+    } }
+}
+#[allow(unused_imports)]
+pub(crate) use option;
 
 #[allow(unused_macros)]
 macro_rules! alias {
