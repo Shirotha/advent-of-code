@@ -19,6 +19,27 @@ pub(super) struct Node<K, V> {
 }
 
 impl<K, V> Node<K, V> {
+    #[inline]
+    pub(super) const fn new(key: K, value: V, parent: NodeIndex, prev: NodeRef, next: NodeRef) -> Self {
+        Self {
+            key, value,
+            color: Color::Red,
+            parent: Some(parent),
+            left: None, right: None,
+            prev, next,
+        }
+    }
+    #[inline]
+    pub(super) const fn root(key: K, value: V) -> Self {
+        Self {
+            key, value,
+            color: Color::Black,
+            parent: None,
+            left: None, right: None,
+            prev: None, next: None
+        }
+    }
+    #[inline(always)]
     pub(super) const fn is_root(&self) -> bool {
         self.parent.is_none()
     }
