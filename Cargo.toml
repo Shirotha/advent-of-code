@@ -27,7 +27,6 @@ easy-ext = "1.0.1"
 cc-traits = { version = "2.0.0", features = ["std", "smallvec"] }
 petgraph = "0.6.4"
 keyed_priority_queue = "0.4.2"
-generational-arena = "0.2.9"
 
 [dev-dependencies]
 divan = "0.1.3"

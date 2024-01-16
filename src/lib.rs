@@ -18,6 +18,10 @@
 #![feature(never_type)]
 #![feature(never_type_fallback)]
 
+#![allow(internal_features)]
+#![feature(rustc_attrs)]
+#![feature(core_intrinsics)]
+
 pub mod puzzles;
 mod collections;
 mod parse;

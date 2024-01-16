@@ -1,8 +1,8 @@
+mod arena;
 mod node;
 mod tree;
 
-use generational_arena::{Arena, Index};
-
+pub use arena::*;
 pub use node::*;
 pub use tree::*;
 
