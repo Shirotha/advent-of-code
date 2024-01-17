@@ -1,11 +1,13 @@
-use std::{sync::{Arc, Mutex, PoisonError}, cmp::Ordering};
+use std::{
+    sync::{Arc, Mutex, PoisonError},
+    cmp::Ordering
+};
 
 use crate::*;
-
 use super::*;
 
 #[derive(Debug, Error)]
-enum Error<K> {
+pub enum Error<K> {
     #[error("failed to aquire lock")]
     LockError,
     #[error("key already exists: {0}")]
@@ -13,7 +15,7 @@ enum Error<K> {
 }
 impl<K, T> From<PoisonError<T>> for Error<K> {
     #[inline(always)]
-    fn from(value: PoisonError<T>) -> Self {
+    fn from(_value: PoisonError<T>) -> Self {
         Self::LockError
     }
 }
@@ -30,56 +32,33 @@ enum SearchResult<T> {
 pub struct Tree<K, V> {
     pub(super) forest: Arc<Mutex<Forest<K, V>>>,
     pub(super) root: NodeRef,
-    pub(super) first: NodeRef,
-    pub(super) last: NodeRef
+    pub(super) bounds: [NodeRef; 2]
 }
 
 impl<K, V> Tree<K, V> {
     #[inline]
-    fn rotate_left(ptr: NodeIndex, root: &mut NodeIndex, nodes: &mut Arena<Node<K, V>>) {
+    fn rotate<const I: usize>(ptr: NodeIndex, root: &mut NodeIndex, nodes: &mut Arena<Node<K, V>>)
+        where [(); 1 - I]:
+    {
         // ASSERT: node has a non-null right child
         let node = &nodes[ptr];
         let parent = node.parent;
         unwrap! { (): {
-            // SATEFY: guarantied by caller
-            let right = node.right?;
-            let left_right = nodes[right].left;
+            // SAFETY: guarantied by caller
+            let other = node.children[1 - I]?;
+            let child_other = nodes[other].children[I];
             discard! {
-                nodes[left_right?].parent = Some(ptr)
+                nodes[child_other?].parent = Some(ptr)
             };
             if let Some(parent) = parent {
                 let parent_node = &mut nodes[parent];
-                if parent_node.left.is_some_and( |left| left == ptr ) {
-                    parent_node.left = Some(right);
+                if parent_node.children[I].is_some_and( |child| child == ptr ) {
+                    parent_node.children[I] = Some(other);
                 } else {
-                    parent_node.right = Some(right);
+                    parent_node.children[1 - I] = Some(other);
                 }
             } else {
-                *root = right;
-            }
-        } }
-    }
-    #[inline]
-    fn rotate_right(ptr: NodeIndex, root: &mut NodeIndex, nodes: &mut Arena<Node<K, V>>) {
-        // ASSERT: node has a non-null left child
-        let node = &nodes[ptr];
-        let parent = node.parent;
-        unwrap! { (): {
-            // SATEFY: guarantied by caller
-            let left = node.left?;
-            let right_left = nodes[left].right;
-            discard! {
-                nodes[right_left?].parent = Some(ptr)
-            };
-            if let Some(parent) = parent {
-                let parent_node = &mut nodes[parent];
-                if parent_node.right.is_some_and( |right| right == ptr ) {
-                    parent_node.right = Some(left);
-                } else {
-                    parent_node.left = Some(left);
-                }
-            } else {
-                *root = left;
+                *root = other;
             }
         } }
     }
@@ -89,7 +68,9 @@ impl<K, V> Tree<K, V>
     where K: Ord
 {
     #[inline]
-    fn search(mut ptr: NodeRef, key: &K, nodes: &Arena<Node<K, V>>) -> SearchResult<NodeIndex> {
+    fn search(mut ptr: NodeRef, key: &K,
+        nodes: &Arena<Node<K, V>>
+    ) -> SearchResult<NodeIndex> {
         let (mut parent, mut left) = (None, false);
         while let Some(valid) = ptr {
             parent = ptr;
@@ -97,12 +78,12 @@ impl<K, V> Tree<K, V>
             match node.key.cmp(key) {
                 Ordering::Greater => {
                     left = true;
-                    ptr = node.left;
+                    ptr = node.children[0];
                 },
                 Ordering::Equal => return SearchResult::Here(valid),
                 Ordering::Less => {
                     left = false;
-                    ptr = node.right;
+                    ptr = node.children[1];
                 }
             }
         }
@@ -114,8 +95,8 @@ impl<K, V> Tree<K, V>
             }
         } else { SearchResult::Empty }
     }
-
-    fn insert(&mut self, key: K, value: V) -> Result<(), Error<K>> {
+    #[inline]
+    pub fn insert(&mut self, key: K, value: V) -> Result<(), Error<K>> {
         let mut lock = self.forest.lock()?;
         let nodes = &mut lock.node_arena;
         match Self::search(self.root, &key, nodes) {
@@ -124,46 +105,78 @@ impl<K, V> Tree<K, V>
                 // Case 1
                 let ptr = nodes.insert(Node::root(key, value));
                 self.root = Some(ptr);
+                self.bounds = [Some(ptr), Some(ptr)];
                 return Ok(())
             },
-            SearchResult::LeftOf(parent) => {
-                let parent_node = &nodes[parent];
-                let prev = parent_node.prev;
-                let node = Node::new(key, value, parent, prev, Some(parent));
-                let ptr = nodes.insert(node);
-                discard! {
-                    nodes[prev?].next = Some(ptr)
-                };
-                let parent_node = &mut nodes[parent];
-                parent_node.left = Some(ptr);
-                parent_node.prev = Some(ptr);
-                if parent_node.parent.is_some() {
-                    // SATEFY: search was successful, so tree cannot be empty
-                    Self::fix_insert(ptr, self.root.as_mut().unwrap(), nodes)
-                }
-            },
-            SearchResult::RightOf(parent) => {
-                let parent_node = &nodes[parent];
-                let next = parent_node.next;
-                let node = Node::new(key, value, parent, Some(parent), next);
-                let ptr = nodes.insert(node);
-                discard! {
-                    nodes[next?].prev = Some(ptr)
-                };
-                let parent_node = &mut nodes[parent];
-                parent_node.right = Some(ptr);
-                parent_node.next = Some(ptr);
-                if parent_node.parent.is_some() {
-                    // SATEFY: search was successful, so tree cannot be empty
-                    Self::fix_insert(ptr, self.root.as_mut().unwrap(), nodes)
-                }
-            }
+            SearchResult::LeftOf(parent) => 
+                // SAFETY: search was succesful, so tree cannot be empty
+                Self::insert_at::<0>(key, value, parent, &mut self.root.unwrap(), &mut self.bounds, nodes),
+            SearchResult::RightOf(parent) =>
+                // SAFETY: search was succesful, so tree cannot be empty
+                Self::insert_at::<1>(key, value, parent, &mut self.root.unwrap(), &mut self.bounds, nodes)
         }
         Ok(())
     }
     #[inline]
+    fn insert_at<const I: usize>(key: K, value: V, parent: NodeIndex,
+        root: &mut NodeIndex, bounds: &mut [NodeRef; 2],
+        nodes: &mut Arena<Node<K, V>>
+    ) where [(); 1 - I]: {
+        // ASSERT: child I is null
+        let parent_node = &nodes[parent];
+        let mut order = [None, None];
+        order[I] = parent_node.order[I];
+        order[1 - I] = Some(parent);
+        let node = Node::new(key, value, parent, order);
+        let ptr = nodes.insert(node);
+        match order[I] {
+            Some(far) => nodes[far].order[1 - I] = Some(ptr),
+            None => bounds[I] = Some(ptr)
+        }
+        let parent_node = &mut nodes[parent];
+        parent_node.children[I] = Some(ptr);
+        parent_node.order[I] = Some(ptr);
+        if parent_node.parent.is_some() {
+            Self::fix_insert(ptr, root, nodes)
+        }
+    }
+    #[inline]
     fn fix_insert(mut ptr: NodeIndex, root: &mut NodeIndex, nodes: &mut Arena<Node<K, V>>) {
         // ASSERT: node has a non-null grand-parent
+        #[inline]
+        fn helper<const I: usize, const J: usize, K, V>(mut ptr: NodeIndex, parent: NodeIndex, grandparent: NodeIndex,
+            root: &mut NodeIndex, nodes: &mut Arena<Node<K, V>>
+        ) -> Option<NodeIndex>
+            where [(); 1 - I]:, [(); 1 - J]:, [(); 1 - (1 - I)]:
+        {
+            let grandparent_node = &nodes[grandparent];
+            // SAFETY: tree is balanced, so nodes on parent level cannot be null
+            let uncle = grandparent_node.children[I]?;
+            let uncle_node = &mut nodes[uncle];
+            if uncle_node.is_red() {
+                // Case 3.1
+                uncle_node.color = Color::Black;
+                nodes[parent].color = Color::Black;
+                nodes[grandparent].color = Color::Red;
+                ptr = grandparent;
+            } else {
+                if I == J {
+                    // Case 3.2.2
+                    ptr = parent;
+                    Tree::rotate::<{1 - I}>(ptr, root, nodes);
+                }
+                // Case 3.2.1
+                let parent = nodes[ptr].parent?;
+                let parent_node = &mut nodes[parent];
+                parent_node.color = Color::Black;
+                // SAFETY: guarantied by caller
+                let grandparent = parent_node.parent?;
+                nodes[grandparent].color = Color::Red;
+                Tree::rotate::<I>(grandparent, root, nodes);
+            }
+            Some(ptr)
+        }
+        
         unwrap! { (): loop {
             let node = &nodes[ptr];
             // SAFETY: node cannot be the root
@@ -173,118 +186,96 @@ impl<K, V> Tree<K, V>
                 // Case 2
                 break;
             }
-            let is_left = parent_node.left.is_some_and( |left| left == ptr );
+            let is_left = parent_node.children[0].is_some_and( |left| left == ptr );
             // SAFETY: guarantied by caller
             let grandparent = parent_node.parent?;
-            let grandparent_node = &nodes[grandparent];
             // SAFETY: tree is balanced, so nodes on parent level cannot be null
-            if grandparent_node.right? == parent{
-                // SAFETY: tree is balanced, so nodes on parent level cannot be null
-                let uncle = grandparent_node.left?;
-                let uncle_node = &mut nodes[uncle];
-                if uncle_node.is_red() {
-                    // Case 3.1
-                    uncle_node.color = Color::Black;
-                    nodes[parent].color = Color::Black;
-                    nodes[grandparent].color = Color::Red;
-                    ptr = grandparent;
+            ptr = if nodes[grandparent].children[1]? == parent {
+                if is_left {
+                    helper::<0, 0, K, V>(ptr, parent, grandparent, root, nodes)?
                 } else {
-                    if is_left {
-                        // Case 3.2.2
-                        ptr = parent;
-                        Self::rotate_right(ptr, root, nodes);
-                    }
-                    // Case 3.2.1
-                    let parent = nodes[ptr].parent?;
-                    let parent_node = &mut nodes[parent];
-                    parent_node.color = Color::Black;
-                    // SAFETY: guarantied by caller
-                    let grandparent = parent_node.parent?;
-                    nodes[grandparent].color = Color::Red;
-                    Self::rotate_left(grandparent, root, nodes);
+                    helper::<0, 1, K, V>(ptr, parent, grandparent, root, nodes)?
                 }
+            } else if is_left {
+                helper::<1, 0, K, V>(ptr, parent, grandparent, root, nodes)?
             } else {
-                // SAFETY: tree is balanced, so nodes on parent level cannot be null
-                let uncle = grandparent_node.right?;
-                let uncle_node = &mut nodes[uncle];
-                if uncle_node.is_red() {
-                    // Case 3.1 (mirror)
-                    uncle_node.color = Color::Black;
-                    nodes[parent].color = Color::Black;
-                    nodes[grandparent].color = Color::Red;
-                    ptr = grandparent;
-                } else {
-                    if !is_left {
-                        // Case 3.2.2 (mirror)
-                        ptr = parent;
-                        Self::rotate_left(ptr, root, nodes);
-                    }
-                    // Case 3.2.1 (mirror)
-                    let parent = nodes[ptr].parent?;
-                    let parent_node = &mut nodes[parent];
-                    parent_node.color = Color::Black;
-                    // SAFETY: guarantied by caller
-                    let grandparent = parent_node.parent?;
-                    nodes[grandparent].color = Color::Red;
-                    Self::rotate_right(grandparent, root, nodes);
-                }
-            }
+                helper::<1, 1, K, V>(ptr, parent, grandparent, root, nodes)?
+            };
             if ptr == *root { break }
         } };
         nodes[*root].color = Color::Black
     }
-
-    fn delete(&mut self, key: &K) -> Result<Option<V>, Error<K>> {
+    #[inline]
+    pub fn delete(&mut self, key: &K) -> Result<Option<V>, Error<K>> {
         let mut lock = self.forest.lock()?;
         let nodes = &mut lock.node_arena;
-        unwrap! { (): if let SearchResult::Here(ptr) = Self::search(self.root, key, nodes) {
+        match Self::search(self.root, key, nodes) {
+            SearchResult::Here(ptr) =>
+                Ok(Some(Self::delete_at(ptr, &mut self.root, &mut self.bounds, nodes))),
+            _ => Ok(None)
+        }
+    }
+    #[inline]
+    fn delete_at(ptr: NodeIndex,
+        root: &mut NodeRef, bounds: &mut [NodeRef; 2],
+        nodes: &mut Arena<Node<K, V>>,
+    ) -> V {
+        unwrap! { V: {
             let node = &nodes[ptr];
             let mut color = node.color;
-            // TODO: fix prev, next of node
-            let fix = if node.left.is_none() {
+            let [prev, next] = node.order;
+            let fix = if node.children[0].is_none() {
                 // SAFETY: 
-                let fix = node.right;
-                Self::transplant(ptr, fix, &mut self.root, nodes);
+                let fix = node.children[1];
+                Self::transplant(ptr, fix, root, nodes);
                 fix
-            } else if node.right.is_none() {
-                let fix = node.left;
-                Self::transplant(ptr, fix, &mut self.root, nodes);
+            } else if node.children[1].is_none() {
+                let fix = node.children[0];
+                Self::transplant(ptr, fix, root, nodes);
                 fix
             } else {
-                let min = Self::min(ptr, nodes);
+                // SAFETY: node has a right child, so has to have a succsesor
+                let min = nodes[ptr].order[1]?;
                 let min_node = &nodes[min];
                 color = min_node.color;
-                let fix = min_node.right;
+                let fix = min_node.children[1];
                 if min_node.parent.is_some_and( |parent| parent == ptr ) {
                     // SAFETY: node has both children in this branch
                     nodes[fix?].parent = Some(min);
                 } else {
-                    Self::transplant(min, nodes[min].right, &mut self.root, nodes);
-                    let right = nodes[ptr].right;
-                    nodes[min].right = right;
+                    Self::transplant(min, nodes[min].children[1], root, nodes);
+                    let right = nodes[ptr].children[1];
+                    nodes[min].children[1] = right;
                     // SAFETY: node has both children in this branch
                     nodes[right?].parent = Some(min);
                 }
-                Self::transplant(ptr, Some(min), &mut self.root, nodes);
+                Self::transplant(ptr, Some(min), root, nodes);
                 let node = &nodes[ptr];
-                let left = node.left;
+                let left = node.children[0];
                 let color = node.color;
                 let min_node = &mut nodes[min];
-                min_node.left = left;
+                min_node.children[0] = left;
                 min_node.color = color;
                 // SAFETY: node has both children in this branch
                 nodes[left?].parent = Some(min);
                 fix
             };
+            match prev {
+                Some(prev) => nodes[prev].order[1] = next,
+                None => bounds[0] = next
+            }
+            match next {
+                Some(next) => nodes[next].order[0] = prev,
+                None => bounds[1] = prev
+            }
             // SAFETY: node was searched before
             let node = nodes.remove(ptr)?;
             if let (Some(fix), Color::Black) = (fix, color) {
                 // SAFETY: search was successful, so tree cannot be empty
-                Self::fix_delete(fix, self.root.as_mut().unwrap(), nodes)
+                Self::fix_delete(fix, root.as_mut().unwrap(), nodes)
             }
-            return Ok(Some(node.value));
-        } };
-        Ok(None)
+            node.value
+        } }
     }
     #[inline]
     fn transplant(ptr: NodeIndex, child: NodeRef, root: &mut NodeRef, nodes: &mut Arena<Node<K, V>>) {
@@ -294,10 +285,10 @@ impl<K, V> Tree<K, V>
         };
         if let Some(parent) = parent {
             let parent_node = &mut nodes[parent];
-            if parent_node.left.is_some_and( |left| left == ptr ) {
-                parent_node.left = child;
+            if parent_node.children[0].is_some_and( |left| left == ptr ) {
+                parent_node.children[0] = child;
             } else {
-                parent_node.right = child;
+                parent_node.children[1] = child;
             }
         } else {
             *root = child;
@@ -306,43 +297,75 @@ impl<K, V> Tree<K, V>
     #[inline]
     fn fix_delete(mut ptr: NodeIndex, root: &mut NodeIndex, nodes: &mut Arena<Node<K, V>>) {
         // ASSERT: node is black
+        #[inline]
+        fn helper<const I: usize, K, V>(mut ptr: NodeIndex, mut parent: NodeIndex,
+            root: &mut NodeIndex, nodes: &mut Arena<Node<K, V>>
+        ) -> NodeIndex
+            where [(); 1 - I]:, [(); 1 - (1 - I)]:
+        {
+            let parent_node = &nodes[parent];
+            unwrap! { (): {
+                // SAFETY: tree is balanced, so nodes on node level cannot be null
+                let mut sibling = parent_node.children[1 - I]?;
+                let sibling_node = &mut nodes[sibling];
+                if sibling_node.is_red() {
+                    // Case 3.1
+                    sibling_node.color = Color::Black;
+                    nodes[parent].color = Color::Red;
+                    Tree::rotate::<I>(parent, root, nodes);
+                    // SAFETY: tree is balanced, so nodes on parent level cannot be null
+                    parent = nodes[ptr].parent?;
+                    // SAFETY: tree is balanced, so nodes on node level cannot be null
+                    sibling = nodes[parent].children[1 - I]?;
+                }
+                let nephews = nodes[sibling].children;
+                let is_black = !nephews[1 - I].is_some_and( |nephew| nodes[nephew].is_red() );
+                if !nephews[I].is_some_and( |nephew| nodes[nephew].is_red() ) && is_black {
+                    // Case 3.2
+                    nodes[sibling].color = Color::Red;
+                    ptr = parent;
+                } else {
+                    if is_black {
+                        // Case 3.3
+                        discard! {
+                            nodes[nephews[I]?].color = Color::Black
+                        };
+                        nodes[sibling].color = Color::Red;
+                        Tree::rotate::<{1 - I}>(sibling, root, nodes);
+                        // SAFETY: tree is balanced, so nodes on parent level cannot be null
+                        parent = nodes[ptr].parent?;
+                        // SAFETY: tree is balanced, so nodes on node level cannot be null
+                        sibling = nodes[parent].children[1 - I]?;
+                    }
+                    // Case 3.4
+                    // SAFETY: sibling is child of parent, both exist
+                    let [sibling_node, parent_node] = nodes.get_many_mut([sibling, parent])?;
+                    sibling_node.color = parent_node.color;
+                    parent_node.color = Color::Black;
+                    // SAFETY: tree is balanced, so nodes on node level cannot be null
+                    let nephew = sibling_node.children[1 - I]?;
+                    nodes[nephew].color = Color::Black;
+                    Tree::rotate::<I>(parent, root, nodes);
+                    ptr = *root;
+                }
+            } };
+            ptr
+        }
+
         loop {
             let node = &mut nodes[ptr];
-            if let (Some(mut parent), Color::Black) = (node.parent, node.color) {
+            if let (Some(parent), Color::Black) = (node.parent, node.color) {
                 // Case 3
-                let parent_node = &nodes[parent];
-                if parent_node.left.is_some_and( |left| left == ptr ) {
-                    let mut sibling = parent_node.right;
-                    // TODO: is sibling always non-null?
-                    discard! { {
-                        let sibling_node = &mut nodes[sibling?];
-                        if sibling_node.is_red() {
-                            // Case 3.1
-                            sibling_node.color = Color::Black;
-                            nodes[parent].color = Color::Red;
-                            Self::rotate_left(parent, root, nodes);
-                            parent = nodes[ptr].parent.unwrap();
-                            sibling = nodes[parent].right;
-                        }
-                    } };
-                    // ...
+                ptr = if nodes[parent].children[0].is_some_and( |left| left == ptr ) {
+                    helper::<0, K, V>(ptr, parent, root, nodes)
                 } else {
-                    let sibling = parent_node.left;
-                    todo!("node is right child");
-                }
+                    helper::<1, K, V>(ptr, parent, root, nodes)
+                };
             } else {
                 // Case 1
                 node.color = Color::Black;
                 return;
             }
         }
-    }
-
-    #[inline]
-    fn min(mut ptr: NodeIndex, nodes: &Arena<Node<K, V>>) -> NodeIndex {
-        while let Some(left) = nodes[ptr].left {
-            ptr = left;
-        }
-        ptr
     }
 }

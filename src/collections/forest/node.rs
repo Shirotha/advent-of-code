@@ -12,21 +12,19 @@ pub(super) struct Node<K, V> {
     pub(super) value: V,
     pub(super) color: Color,
     pub(super) parent: NodeRef,
-    pub(super) left: NodeRef,
-    pub(super) right: NodeRef,
-    pub(super) prev: NodeRef,
-    pub(super) next: NodeRef
+    pub(super) children: [NodeRef; 2],
+    pub(super) order: [NodeRef; 2]
 }
 
 impl<K, V> Node<K, V> {
     #[inline]
-    pub(super) const fn new(key: K, value: V, parent: NodeIndex, prev: NodeRef, next: NodeRef) -> Self {
+    pub(super) const fn new(key: K, value: V, parent: NodeIndex, order: [NodeRef; 2]) -> Self {
         Self {
             key, value,
             color: Color::Red,
             parent: Some(parent),
-            left: None, right: None,
-            prev, next,
+            children: [None, None],
+            order
         }
     }
     #[inline]
@@ -35,8 +33,8 @@ impl<K, V> Node<K, V> {
             key, value,
             color: Color::Black,
             parent: None,
-            left: None, right: None,
-            prev: None, next: None
+            children: [None, None],
+            order: [None, None]
         }
     }
     #[inline(always)]

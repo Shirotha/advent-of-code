@@ -22,6 +22,9 @@
 #![feature(rustc_attrs)]
 #![feature(core_intrinsics)]
 
+#![allow(incomplete_features)]
+#![feature(generic_const_exprs)]
+
 pub mod puzzles;
 mod collections;
 mod parse;
