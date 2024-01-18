@@ -17,6 +17,7 @@
 #![feature(try_trait_v2)]
 #![feature(never_type)]
 #![feature(never_type_fallback)]
+#![feature(sync_unsafe_cell)]
 
 #![allow(internal_features)]
 #![feature(rustc_attrs)]

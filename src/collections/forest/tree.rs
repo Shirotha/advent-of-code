@@ -1,6 +1,7 @@
 use std::{
-    sync::{Arc, Mutex, PoisonError},
-    cmp::Ordering
+    sync::{PoisonError},
+    cmp::Ordering,
+    ops::Index
 };
 
 use crate::*;
@@ -30,16 +31,16 @@ enum SearchResult<T> {
 
 #[derive(Debug)]
 pub struct Tree<K, V> {
-    pub(super) forest: Arc<Mutex<Forest<K, V>>>,
+    pub(super) port: Port<Node<K, V>>,
     pub(super) root: NodeRef,
     pub(super) bounds: [NodeRef; 2]
 }
 
 impl<K, V> Tree<K, V> {
     #[inline]
-    fn rotate<const I: usize>(ptr: NodeIndex, root: &mut NodeIndex, nodes: &mut Arena<Node<K, V>>)
-        where [(); 1 - I]:
-    {
+    fn rotate<const I: usize>(ptr: NodeIndex,
+        root: &mut NodeIndex, nodes: &mut PortWriteGuard<Node<K, V>>
+    ) where [(); 1 - I]: {
         // ASSERT: node has a non-null right child
         let node = &nodes[ptr];
         let parent = node.parent;
@@ -65,12 +66,14 @@ impl<K, V> Tree<K, V> {
 }
 
 impl<K, V> Tree<K, V>
-    where K: Ord
+    where K: Ord + Clone
 {
     #[inline]
-    fn search(mut ptr: NodeRef, key: &K,
-        nodes: &Arena<Node<K, V>>
-    ) -> SearchResult<NodeIndex> {
+    fn search<C>(mut ptr: NodeRef, key: &K,
+        nodes: &C
+    ) -> SearchResult<NodeIndex>
+        where C: Index<NodeIndex, Output = Node<K, V>>
+    {
         let (mut parent, mut left) = (None, false);
         while let Some(valid) = ptr {
             parent = ptr;
@@ -97,38 +100,42 @@ impl<K, V> Tree<K, V>
     }
     #[inline]
     pub fn insert(&mut self, key: K, value: V) -> Result<(), Error<K>> {
-        let mut lock = self.forest.lock()?;
-        let nodes = &mut lock.node_arena;
-        match Self::search(self.root, &key, nodes) {
-            SearchResult::Here(_) => return Err(Error::DuplicateKey(key)),
+        let ptr = self.port.insert(Node::new(key, value));
+        self.insert_node(ptr)
+    }
+    #[inline]
+    fn insert_node(&mut self, ptr: NodeIndex) -> Result<(), Error<K>> {
+        let mut nodes = self.port.write();
+        let key = &nodes[ptr].key;
+        match Self::search(self.root, key, &nodes) {
+            SearchResult::Here(_) => return Err(Error::DuplicateKey(key.clone())),
             SearchResult::Empty => {
                 // Case 1
-                let ptr = nodes.insert(Node::root(key, value));
                 self.root = Some(ptr);
                 self.bounds = [Some(ptr), Some(ptr)];
                 return Ok(())
             },
             SearchResult::LeftOf(parent) => 
                 // SAFETY: search was succesful, so tree cannot be empty
-                Self::insert_at::<0>(key, value, parent, &mut self.root.unwrap(), &mut self.bounds, nodes),
+                Self::insert_at::<0>(ptr, parent, &mut self.root.unwrap(), &mut self.bounds, &mut nodes),
             SearchResult::RightOf(parent) =>
                 // SAFETY: search was succesful, so tree cannot be empty
-                Self::insert_at::<1>(key, value, parent, &mut self.root.unwrap(), &mut self.bounds, nodes)
+                Self::insert_at::<1>(ptr, parent, &mut self.root.unwrap(), &mut self.bounds, &mut nodes)
         }
         Ok(())
     }
     #[inline]
-    fn insert_at<const I: usize>(key: K, value: V, parent: NodeIndex,
+    fn insert_at<const I: usize>(ptr: NodeIndex, parent: NodeIndex,
         root: &mut NodeIndex, bounds: &mut [NodeRef; 2],
-        nodes: &mut Arena<Node<K, V>>
+        nodes: &mut PortWriteGuard<Node<K, V>>
     ) where [(); 1 - I]: {
         // ASSERT: child I is null
-        let parent_node = &nodes[parent];
         let mut order = [None, None];
-        order[I] = parent_node.order[I];
+        order[I] = nodes[parent].order[I];
         order[1 - I] = Some(parent);
-        let node = Node::new(key, value, parent, order);
-        let ptr = nodes.insert(node);
+        let node = &mut nodes[ptr];
+        node.parent = Some(parent);
+        node.order = order;
         match order[I] {
             Some(far) => nodes[far].order[1 - I] = Some(ptr),
             None => bounds[I] = Some(ptr)
@@ -141,11 +148,13 @@ impl<K, V> Tree<K, V>
         }
     }
     #[inline]
-    fn fix_insert(mut ptr: NodeIndex, root: &mut NodeIndex, nodes: &mut Arena<Node<K, V>>) {
+    fn fix_insert(mut ptr: NodeIndex,
+        root: &mut NodeIndex, nodes: &mut PortWriteGuard<Node<K, V>>
+    ) {
         // ASSERT: node has a non-null grand-parent
         #[inline]
         fn helper<const I: usize, const J: usize, K, V>(mut ptr: NodeIndex, parent: NodeIndex, grandparent: NodeIndex,
-            root: &mut NodeIndex, nodes: &mut Arena<Node<K, V>>
+            root: &mut NodeIndex, nodes: &mut PortWriteGuard<Node<K, V>>
         ) -> Option<NodeIndex>
             where [(); 1 - I]:, [(); 1 - J]:, [(); 1 - (1 - I)]:
         {
@@ -207,18 +216,17 @@ impl<K, V> Tree<K, V>
     }
     #[inline]
     pub fn delete(&mut self, key: &K) -> Result<Option<V>, Error<K>> {
-        let mut lock = self.forest.lock()?;
-        let nodes = &mut lock.node_arena;
-        match Self::search(self.root, key, nodes) {
+        let mut nodes = self.port.write();
+        match Self::search(self.root, key, &nodes) {
             SearchResult::Here(ptr) =>
-                Ok(Some(Self::delete_at(ptr, &mut self.root, &mut self.bounds, nodes))),
+                Ok(Some(Self::delete_at(ptr, &mut self.root, &mut self.bounds, &mut nodes))),
             _ => Ok(None)
         }
     }
     #[inline]
     fn delete_at(ptr: NodeIndex,
         root: &mut NodeRef, bounds: &mut [NodeRef; 2],
-        nodes: &mut Arena<Node<K, V>>,
+        nodes: &mut PortWriteGuard<Node<K, V>>,
     ) -> V {
         unwrap! { V: {
             let node = &nodes[ptr];
@@ -269,7 +277,8 @@ impl<K, V> Tree<K, V>
                 None => bounds[1] = prev
             }
             // SAFETY: node was searched before
-            let node = nodes.remove(ptr)?;
+            // FIXME: use new system
+            //let node = nodes.remove(ptr)?;
             if let (Some(fix), Color::Black) = (fix, color) {
                 // SAFETY: search was successful, so tree cannot be empty
                 Self::fix_delete(fix, root.as_mut().unwrap(), nodes)
@@ -278,7 +287,9 @@ impl<K, V> Tree<K, V>
         } }
     }
     #[inline]
-    fn transplant(ptr: NodeIndex, child: NodeRef, root: &mut NodeRef, nodes: &mut Arena<Node<K, V>>) {
+    fn transplant(ptr: NodeIndex, child: NodeRef,
+        root: &mut NodeRef, nodes: &PortWriteGuard<Node<K, V>>
+    ) {
         let parent = nodes[ptr].parent;
         discard! {
             nodes[child?].parent = parent
@@ -295,11 +306,13 @@ impl<K, V> Tree<K, V>
         }
     }
     #[inline]
-    fn fix_delete(mut ptr: NodeIndex, root: &mut NodeIndex, nodes: &mut Arena<Node<K, V>>) {
+    fn fix_delete(mut ptr: NodeIndex,
+        root: &mut NodeIndex, nodes: &mut PortWriteGuard<Node<K, V>>
+    ) {
         // ASSERT: node is black
         #[inline]
         fn helper<const I: usize, K, V>(mut ptr: NodeIndex, mut parent: NodeIndex,
-            root: &mut NodeIndex, nodes: &mut Arena<Node<K, V>>
+            root: &mut NodeIndex, nodes: &mut PortWriteGuard<Node<K, V>>
         ) -> NodeIndex
             where [(); 1 - I]:, [(); 1 - (1 - I)]:
         {

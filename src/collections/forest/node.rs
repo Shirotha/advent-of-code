@@ -18,17 +18,7 @@ pub(super) struct Node<K, V> {
 
 impl<K, V> Node<K, V> {
     #[inline]
-    pub(super) const fn new(key: K, value: V, parent: NodeIndex, order: [NodeRef; 2]) -> Self {
-        Self {
-            key, value,
-            color: Color::Red,
-            parent: Some(parent),
-            children: [None, None],
-            order
-        }
-    }
-    #[inline]
-    pub(super) const fn root(key: K, value: V) -> Self {
+    pub(super) const fn new(key: K, value: V) -> Self {
         Self {
             key, value,
             color: Color::Black,
