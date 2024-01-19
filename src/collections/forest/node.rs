@@ -1,6 +1,6 @@
 use super::*;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive_const(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Color {
     Black,
     Red

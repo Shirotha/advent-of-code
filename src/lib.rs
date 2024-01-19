@@ -5,6 +5,7 @@
 #![feature(maybe_uninit_uninit_array)]
 #![feature(maybe_uninit_array_assume_init)]
 #![feature(const_trait_impl)]
+#![feature(derive_const)]
 #![feature(type_alias_impl_trait)]
 #![feature(stmt_expr_attributes)]
 #![feature(array_windows)]

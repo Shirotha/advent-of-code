@@ -3,11 +3,11 @@ use std::{
     ops::{Index as IndexRO, IndexMut},
     mem::{replace, MaybeUninit},
     intrinsics::transmute_unchecked,
-    sync::{Mutex, Condvar, Arc},
     cell::SyncUnsafeCell,
-    fmt::Debug
+    fmt::Debug, sync::Arc
 };
 
+use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use cc_traits::{
     Collection, CollectionRef, CollectionMut,
     Get, GetMut, Insert, Remove,
@@ -17,108 +17,21 @@ use thiserror::Error;
 
 use super::GetManyMut;
 
-#[derive(Debug, Error)]
-#[error("lock was poisoned")]
-pub struct PoisonError;
-impl<T> From<std::sync::PoisonError<T>> for PoisonError {
-    #[inline(always)]
-    fn from(_value: std::sync::PoisonError<T>) -> Self {
-        PoisonError
-    }
-}
-
-#[derive(Debug, Error)]
+#[derive_const(Debug, Error)]
 pub enum Error {
     #[error("invalid index combination")]
     GetManyMut,
     #[error("one of the indices is invalid")]
     NotOccupied,
-    #[error(transparent)]
-    Poison(#[from] PoisonError),
 }
-impl<const N: usize> From<GetManyMutError<N>> for Error {
+impl<const N: usize> const From<GetManyMutError<N>> for Error {
     #[inline]
     fn from(_value: GetManyMutError<N>) -> Self {
         Self::GetManyMut
     }
 }
 
-#[derive(Debug)]
-struct Semaphore {
-    readers: u32,
-    writers: u32
-}
-#[derive(Debug)]
-struct RwLock<T> {
-    semaphore: Mutex<Semaphore>,
-    read_cond: Condvar,
-    write_cond: Condvar,
-    data: SyncUnsafeCell<T>
-}
-impl<T> RwLock<T> {
-    #[inline]
-    fn new(data: T) -> Self {
-        Self {
-            semaphore: Mutex::new(Semaphore { readers: 0, writers: 0 }),
-            read_cond: Condvar::new(),
-            write_cond: Condvar::new(),
-            data: data.into(),
-        }
-    }
-    #[inline]
-    // TODO: just unwrap, poisoned data should cause ff
-    fn aquire_read(&self) -> Result<&T, PoisonError> {
-        let mut guard = self.semaphore.lock()?;
-        while guard.writers != 0 {
-            guard = self.read_cond.wait(guard)?
-        }
-        guard.readers += 1;
-        Ok(unsafe { &*self.data.get() })
-    }
-    #[allow(clippy::mut_from_ref)]
-    #[inline]
-    unsafe fn unsafe_aquire_read(&self) -> Result<&mut T, PoisonError> {
-        // SAFETY: caller has to guaranty that write only occures while holding write access to inner lock
-        let mut guard = self.semaphore.lock()?;
-        while guard.writers != 0 {
-            guard = self.read_cond.wait(guard)?
-        }
-        guard.readers += 1;
-        Ok(unsafe { &mut *self.data.get() })
-    }
-    #[inline]
-    fn free_read(&self) -> Result<(), PoisonError> {
-        let mut guard = self.semaphore.lock()?;
-        guard.readers -= 1;
-        if guard.readers == 0 && guard.writers != 0 {
-            self.write_cond.notify_one();
-        }
-        Ok(())
-    }
-    #[allow(clippy::mut_from_ref)]
-    #[inline]
-    fn aquire_write(&self) -> Result<&mut T, PoisonError> {
-        let mut guard = self.semaphore.lock()?;
-        guard.writers += 1;
-        while guard.readers != 0 {
-            guard = self.write_cond.wait(guard)?;
-        }
-        Ok(unsafe { &mut *self.data.get() })
-    }
-    #[inline]
-    fn free_write(&self) -> Result<(), PoisonError> {
-        let mut guard = self.semaphore.lock()?;
-        guard.writers -= 1;
-        if guard.writers != 0 {
-            self.write_cond.notify_one();
-        } else {
-            self.read_cond.notify_all();
-        }
-        Ok(())
-    }
-}
-
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[derive_const(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
 #[repr(transparent)]
 #[cfg_attr(target_pointer_width = "64", rustc_layout_scalar_valid_range_end(0xffffffff_fffffffe))]
 #[cfg_attr(target_pointer_width = "32", rustc_layout_scalar_valid_range_end(0xfffffffe))]
@@ -126,16 +39,9 @@ impl<T> RwLock<T> {
 pub(super) struct Index(usize);
 impl Index {
     #[inline(always)]
-    pub const unsafe fn new_unchecked(value: usize) -> Self {
+    const unsafe fn new_unchecked(value: usize) -> Self {
         // SAFETY: value != usize::MAX guarantied from caller
         Self(value)
-    }
-    #[inline]
-    pub const fn new(value: usize) -> Option<Self> {
-        if value != usize::MAX {
-            // SAFETY: value if bounds checked
-            Some(unsafe { Self(value) })
-        } else { None }
     }
 }
 
@@ -161,7 +67,7 @@ impl<T> Arena<T> {
     }
     #[inline]
     pub fn into_port(self) -> Port<T> {
-        Port(Arc::new(RwLock::new(self)), Arc::new(RwLock::new(())))
+        Port(Arc::new(RwLock::new(self.into())), Arc::new(RwLock::new(())))
     }
     #[inline]
     pub fn insert(&mut self, value: T) -> Index {
@@ -235,14 +141,14 @@ impl<T> Arena<T> {
         Ok(unsafe { MaybeUninit::array_assume_init(result) })
     }
 }
-impl<T> Collection for Arena<T> {
+impl<T> const Collection for Arena<T> {
     type Item = T;
 }
-impl<T> CollectionRef for Arena<T> {
+impl<T> const CollectionRef for Arena<T> {
     type ItemRef<'a> = &'a T where Self: 'a;
     covariant_item_ref!();
 }
-impl<T> CollectionMut for Arena<T> {
+impl<T> const CollectionMut for Arena<T> {
     type ItemMut<'a> = &'a mut T where Self: 'a;
     covariant_item_mut!();
 }
@@ -303,75 +209,77 @@ impl<T> IndexMut<Index> for Arena<T> {
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct Port<T>(Arc<RwLock<Arena<T>>>, Arc<RwLock<()>>);
+pub(super) struct Port<T>(Arc<RwLock<SyncUnsafeCell<Arena<T>>>>, Arc<RwLock<()>>);
 impl<T> Port<T> {
     #[inline]
     pub fn split(&self) -> Self {
         Port(self.0.clone(), Arc::new(RwLock::new(())))
     }
     #[inline]
-    pub fn read(&self) -> Result<PortReadGuard<T>, PoisonError> {
-        let arena = self.0.aquire_read()?;
-        self.1.aquire_read()?;
-        Ok(PortReadGuard { items: &arena.items, port_lock: &self.1, arena_lock: &self.0 })
+    pub fn read(&self) -> PortReadGuard<T> {
+        let arena = self.0.read();
+        let port = self.1.read();
+        PortReadGuard { arena, _port: port }
     }
     #[inline]
-    pub fn write(&self) -> Result<PortWriteGuard<T>, PoisonError> {
+    pub fn write(&self) -> PortWriteGuard<T> {
         // SAFETY: only access to mutable reference is to port-owned items while owning write lock to port
-        let arena = unsafe { self.0.unsafe_aquire_read()? };
-        self.1.aquire_write()?;
-        Ok(PortWriteGuard { items: &mut arena.items, port_lock: &self.1, arena_lock: &self.0 })
+        let arena = self.0.read();
+        let port = self.1.write();
+        PortWriteGuard { arena, _port: port }
     }
     #[inline]
-    pub fn insert(&mut self, value: T) -> Result<Index, PoisonError> {
-        let arena = self.0.aquire_write()?;
-        Ok(arena.insert(value))
+    pub fn insert(&mut self, value: T) -> Index {
+        let mut arena = self.0.write();
+        arena.get_mut().insert(value)
     }
     #[inline]
-    pub fn remove(&mut self, index: Index) -> Result<Option<T>, PoisonError> {
-        let arena = self.0.aquire_write()?;
-        Ok(arena.remove(index))
+    pub fn remove(&mut self, index: Index) -> Option<T> {
+        let mut arena = self.0.write();
+        arena.get_mut().remove(index)
     }
 }
-impl<T> Collection for Port<T> {
+impl<T> const Collection for Port<T> {
     type Item = T;
 }
 impl<T> Insert for Port<T> {
     type Output = Index;
     #[inline(always)]
     fn insert(&mut self, value: Self::Item) -> Self::Output {
-        self.insert(value).unwrap()
+        self.insert(value)
     }
 }
 impl<T> Remove<Index> for Port<T> {
     #[inline(always)]
     fn remove(&mut self, index: Index) -> Option<Self::Item> {
-        self.remove(index).unwrap()
+        self.remove(index)
     }
 }
 
+#[derive(Debug)]
 pub(super) struct PortReadGuard<'a, T> {
-    items: &'a [Entry<T>],
-    port_lock: &'a RwLock<()>,
-    arena_lock: &'a RwLock<Arena<T>>
+    arena: RwLockReadGuard<'a, SyncUnsafeCell<Arena<T>>>,
+    _port: RwLockReadGuard<'a, ()>
 }
 impl<'a, T> PortReadGuard<'a, T> {
     #[inline]
+    fn arena(&self) -> &Arena<T> {
+        // SAFETY: arena is not null
+        unsafe { self.arena.get().as_ref().unwrap() }
+    }
+    #[inline]
     pub fn get(&self, index: Index) -> Option<&T> {
-        match self.items.get(index.0) {
-            Some(Entry::Occupied(value)) => Some(value),
-            _ => None
-        }
+        self.arena().get(index)
     }
     #[inline]
     pub fn contains(&self, index: Index) -> bool {
-        matches!(self.items.get(index.0), Some(Entry::Occupied(_)))
+        self.arena().contains(index)
     }
 }
-impl<'a, T> Collection for PortReadGuard<'a, T> {
+impl<'a, T> const Collection for PortReadGuard<'a, T> {
     type Item = T;
 }
-impl<'a, T> CollectionRef for PortReadGuard<'a, T> {
+impl<'a, T> const CollectionRef for PortReadGuard<'a, T> {
     type ItemRef<'b> = &'b T where Self: 'b;
     covariant_item_ref!();
 }
@@ -395,62 +303,48 @@ impl<'a, T> IndexRO<Index> for PortReadGuard<'a, T> {
         }
     }
 }
-impl<'a, T> Drop for PortReadGuard<'a, T> {
-    #[inline]
-    fn drop(&mut self) {
-        _ = self.port_lock.free_read();
-        _ = self.arena_lock.free_read();
-    }
-}
 
+#[derive(Debug)]
 pub(super) struct PortWriteGuard<'a, T> {
-    items: &'a mut [Entry<T>],
-    port_lock: &'a RwLock<()>,
-    arena_lock: &'a RwLock<Arena<T>>
+    arena: RwLockReadGuard<'a, SyncUnsafeCell<Arena<T>>>,
+    _port: RwLockWriteGuard<'a, ()>
 }
 impl<'a, T> PortWriteGuard<'a, T> {
     #[inline]
+    fn arena(&self) -> &Arena<T> {
+        // SAFETY: arena is not null
+        unsafe { self.arena.get().as_ref().unwrap() }
+    }
+    #[inline]
+    fn arena_mut(&mut self) -> &mut Arena<T> {
+        // SAFETY: arena is not null
+        unsafe { self.arena.get().as_mut().unwrap() }
+    }
+    #[inline]
     pub fn get(&self, index: Index) -> Option<&T> {
-        match self.items.get(index.0) {
-            Some(Entry::Occupied(value)) => Some(value),
-            _ => None
-        }
+        self.arena().get(index)
     }
     #[inline]
     pub fn contains(&self, index: Index) -> bool {
-        matches!(self.items.get(index.0), Some(Entry::Occupied(_)))
+        self.arena().contains(index)
     }
     #[inline]
     pub fn get_mut(&mut self, index: Index) -> Option<&mut T> {
-        match self.items.get_mut(index.0) {
-            Some(Entry::Occupied(value)) => Some(value),
-            _ => None
-        }
+        self.arena_mut().get_mut(index)
     }
     #[inline]
     pub fn get_many_mut<const N: usize>(&mut self, indices: [Index; N]) -> Result<[&mut T; N], Error> {
-        // SATEFY: Index is guarantied to have the same memory layout as usize
-        let indices: [usize; N] = unsafe { transmute_unchecked(indices) };
-        let entries = self.items.get_many_mut(indices)?;
-        let mut result = MaybeUninit::uninit_array();
-        for (result, entry) in result.iter_mut().zip(entries) {
-            match entry {
-                Entry::Occupied(value) => _ = result.write(value),
-                _ => Err(Error::NotOccupied)?
-            }
-        }
-        // SAFETY: initialized in previous loop
-        Ok(unsafe { MaybeUninit::array_assume_init(result) })
+        self.arena_mut().get_many_mut(indices)
     }
 }
-impl<'a, T> Collection for PortWriteGuard<'a, T> {
+impl<'a, T> const Collection for PortWriteGuard<'a, T> {
     type Item = T;
 }
-impl<'a, T> CollectionRef for PortWriteGuard<'a, T> {
+impl<'a, T> const CollectionRef for PortWriteGuard<'a, T> {
     type ItemRef<'b> = &'b T where Self: 'b;
     covariant_item_ref!();
 }
-impl<'a, T> CollectionMut for PortWriteGuard<'a, T> {
+impl<'a, T> const CollectionMut for PortWriteGuard<'a, T> {
     type ItemMut<'b> = &'b mut T where Self: 'b;
     covariant_item_mut!();
 }
@@ -494,12 +388,5 @@ impl<'a, T> IndexMut<Index> for PortWriteGuard<'a, T> {
             Some(value) => value,
             _ => panic!("{} is not a valid index", index.0)
         }
-    }
-}
-impl<'a, T> Drop for PortWriteGuard<'a, T> {
-    #[inline]
-    fn drop(&mut self) {
-        _ = self.port_lock.free_write();
-        _ = self.arena_lock.free_read();
     }
 }
