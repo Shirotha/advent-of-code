@@ -1,24 +1,28 @@
 use std::{
-    sync::{PoisonError},
     cmp::Ordering,
-    ops::Index
+    ops::{Index, IndexMut},
+    mem::MaybeUninit
+};
+
+use cc_traits::{
+    Collection, CollectionRef, CollectionMut, Keyed, KeyedRef,
+    Get, GetMut, GetKeyValue, GetKeyValueMut, MapInsert, Remove, Len,
+    covariant_item_ref, covariant_item_mut, covariant_key_ref
 };
 
 use crate::*;
 use super::*;
 
 #[derive(Debug, Error)]
-pub enum Error<K> {
-    #[error("failed to aquire lock")]
-    LockError,
-    #[error("key already exists: {0}")]
-    DuplicateKey(K)
-}
-impl<K, T> From<PoisonError<T>> for Error<K> {
-    #[inline(always)]
-    fn from(_value: PoisonError<T>) -> Self {
-        Self::LockError
-    }
+pub enum Error {
+    #[error(transparent)]
+    Poison(#[from] PoisonError),
+    #[error("key already exists")]
+    DuplicateKey,
+    #[error("invalid key combination")]
+    GetManyMut,
+    #[error(transparent)]
+    Arena(#[from] arena::Error)
 }
 
 #[derive(Debug)]
@@ -33,10 +37,19 @@ enum SearchResult<T> {
 pub struct Tree<K, V> {
     pub(super) port: Port<Node<K, V>>,
     pub(super) root: NodeRef,
-    pub(super) bounds: [NodeRef; 2]
+    pub(super) bounds: [NodeRef; 2],
+    len: usize
 }
 
 impl<K, V> Tree<K, V> {
+    #[inline(always)]
+    const fn len(&self) -> usize {
+        self.len
+    }
+    #[inline(always)]
+    const fn is_empty(&self) -> bool {
+        self.len == 0
+    }
     #[inline]
     fn rotate<const I: usize>(ptr: NodeIndex,
         root: &mut NodeIndex, nodes: &mut PortWriteGuard<Node<K, V>>
@@ -65,8 +78,7 @@ impl<K, V> Tree<K, V> {
     }
 }
 
-impl<K, V> Tree<K, V>
-    where K: Ord + Clone
+impl<K: Ord, V> Tree<K, V>
 {
     #[inline]
     fn search<C>(mut ptr: NodeRef, key: &K,
@@ -99,28 +111,63 @@ impl<K, V> Tree<K, V>
         } else { SearchResult::Empty }
     }
     #[inline]
-    pub fn insert(&mut self, key: K, value: V) -> Result<(), Error<K>> {
-        let ptr = self.port.insert(Node::new(key, value));
-        self.insert_node(ptr)
+    pub fn contains(&self, key: &K) -> Result<bool, Error> {
+        if self.is_empty() { return Ok(false); }
+        let nodes = self.port.read()?;
+        Ok(matches!(Self::search(self.root, key, &nodes), SearchResult::Here(_)))
     }
     #[inline]
-    fn insert_node(&mut self, ptr: NodeIndex) -> Result<(), Error<K>> {
-        let mut nodes = self.port.write();
+    pub fn insert(&mut self, key: K, value: V) -> Result<bool, Error> {
+        let mut nodes = self.port.write()?;
+        match Self::search(self.root, &key, &nodes) {
+            SearchResult::Here(ptr) => {
+                nodes[ptr].value = value;
+                return Ok(false)
+            },
+            SearchResult::Empty => {
+                drop(nodes);
+                let ptr = Some(self.port.insert(Node::new(key, value))?);
+                self.root = ptr;
+                self.bounds = [ptr, ptr]
+            },
+            SearchResult::LeftOf(parent) => {
+                drop(nodes);
+                let ptr = self.port.insert(Node::new(key, value))?;
+                let mut nodes = self.port.write()?;
+                Self::insert_at::<0>(ptr, parent, &mut self.root.unwrap(), &mut self.bounds, &mut nodes);
+            },
+            SearchResult::RightOf(parent) => {
+                drop(nodes);
+                let ptr = self.port.insert(Node::new(key, value))?;
+                let mut nodes = self.port.write()?;
+                Self::insert_at::<1>(ptr, parent, &mut self.root.unwrap(), &mut self.bounds, &mut nodes);
+            }
+        }
+        Ok(true)
+    }
+    #[inline]
+    pub(super) fn insert_node(&mut self, ptr: NodeIndex) -> Result<(), Error> {
+        // ASSERT: node is not part of another tree
+        let mut nodes = self.port.write()?;
         let key = &nodes[ptr].key;
         match Self::search(self.root, key, &nodes) {
-            SearchResult::Here(_) => return Err(Error::DuplicateKey(key.clone())),
+            SearchResult::Here(_) => return Err(Error::DuplicateKey),
             SearchResult::Empty => {
                 // Case 1
                 self.root = Some(ptr);
                 self.bounds = [Some(ptr), Some(ptr)];
-                return Ok(())
+                self.len = 1;
             },
-            SearchResult::LeftOf(parent) => 
+            SearchResult::LeftOf(parent) => {
                 // SAFETY: search was succesful, so tree cannot be empty
-                Self::insert_at::<0>(ptr, parent, &mut self.root.unwrap(), &mut self.bounds, &mut nodes),
-            SearchResult::RightOf(parent) =>
+                Self::insert_at::<0>(ptr, parent, &mut self.root.unwrap(), &mut self.bounds, &mut nodes);
+                self.len += 1;
+            },
+            SearchResult::RightOf(parent) => {
                 // SAFETY: search was succesful, so tree cannot be empty
-                Self::insert_at::<1>(ptr, parent, &mut self.root.unwrap(), &mut self.bounds, &mut nodes)
+                Self::insert_at::<1>(ptr, parent, &mut self.root.unwrap(), &mut self.bounds, &mut nodes);
+                self.len += 1;
+            }
         }
         Ok(())
     }
@@ -215,20 +262,26 @@ impl<K, V> Tree<K, V>
         nodes[*root].color = Color::Black
     }
     #[inline]
-    pub fn delete(&mut self, key: &K) -> Result<Option<V>, Error<K>> {
-        let mut nodes = self.port.write();
-        match Self::search(self.root, key, &nodes) {
-            SearchResult::Here(ptr) =>
-                Ok(Some(Self::delete_at(ptr, &mut self.root, &mut self.bounds, &mut nodes))),
+    pub fn remove(&mut self, key: K) -> Result<Option<V>, Error> {
+        let mut nodes = self.port.write()?;
+        match Self::search(self.root, &key, &nodes) {
+            SearchResult::Here(ptr) => {
+                self.len -= 1;
+                Self::remove_at(ptr, &mut self.root, &mut self.bounds, &mut nodes);
+                drop(nodes);
+                // SAFETY: node was found, so it exists
+                Ok(Some(self.port.remove(ptr)?.unwrap().value))
+            }
             _ => Ok(None)
         }
     }
     #[inline]
-    fn delete_at(ptr: NodeIndex,
+    pub(super) fn remove_at(ptr: NodeIndex,
         root: &mut NodeRef, bounds: &mut [NodeRef; 2],
         nodes: &mut PortWriteGuard<Node<K, V>>,
-    ) -> V {
-        unwrap! { V: {
+    ) {
+        // ASSERT: root is the root of node
+        unwrap! { (): {
             let node = &nodes[ptr];
             let mut color = node.color;
             let [prev, next] = node.order;
@@ -281,14 +334,13 @@ impl<K, V> Tree<K, V>
             //let node = nodes.remove(ptr)?;
             if let (Some(fix), Color::Black) = (fix, color) {
                 // SAFETY: search was successful, so tree cannot be empty
-                Self::fix_delete(fix, root.as_mut().unwrap(), nodes)
+                Self::fix_remove(fix, root.as_mut().unwrap(), nodes)
             }
-            node.value
-        } }
+        } };
     }
     #[inline]
     fn transplant(ptr: NodeIndex, child: NodeRef,
-        root: &mut NodeRef, nodes: &PortWriteGuard<Node<K, V>>
+        root: &mut NodeRef, nodes: &mut PortWriteGuard<Node<K, V>>
     ) {
         let parent = nodes[ptr].parent;
         discard! {
@@ -306,7 +358,7 @@ impl<K, V> Tree<K, V>
         }
     }
     #[inline]
-    fn fix_delete(mut ptr: NodeIndex,
+    fn fix_remove(mut ptr: NodeIndex,
         root: &mut NodeIndex, nodes: &mut PortWriteGuard<Node<K, V>>
     ) {
         // ASSERT: node is black
@@ -379,6 +431,239 @@ impl<K, V> Tree<K, V>
                 node.color = Color::Black;
                 return;
             }
+        }
+    }
+    #[inline]
+    pub fn read(&self) -> Result<TreeReadGuard<K, V>, Error> {
+        let nodes = self.port.read()?;
+        Ok(TreeReadGuard { tree: self, nodes })
+    }
+    pub fn write(&mut self) -> Result<TreeWriteGuard<K, V>, Error> {
+        let nodes = self.port.write()?;
+        Ok(TreeWriteGuard { tree: self, nodes })
+    }
+}
+impl<K: Ord, V> Collection for Tree<K, V> {
+    type Item = V;
+}
+impl<K: Ord, V> MapInsert<K> for Tree<K, V> {
+    type Output = bool;
+    #[inline(always)]
+    fn insert(&mut self, key: K, value: Self::Item) -> Self::Output {
+        self.insert(key, value).unwrap()
+    }
+}
+impl<K: Ord, V> Remove<K> for Tree<K, V> {
+    fn remove(&mut self, key: K) -> Option<Self::Item> {
+        self.remove(key).unwrap()
+    }
+}
+
+pub struct TreeReadGuard<'a, K: Ord, V> {
+    tree: &'a Tree<K, V>,
+    nodes: PortReadGuard<'a, Node<K, V>>
+}
+impl<'a, K: Ord, V> TreeReadGuard<'a, K, V> {
+    #[inline]
+    pub fn get(&self, key: &K) -> Option<&V> {
+        match Tree::search(self.tree.root, key, &self.nodes) {
+            SearchResult::Here(ptr) => Some(&self.nodes[ptr].value),
+            _ => None
+        }
+    }
+    #[inline]
+    pub fn contains(&self, key: &K) -> bool {
+        matches!(Tree::search(self.tree.root, key, &self.nodes), SearchResult::Here(_))
+    }
+}
+impl<'a, K: Ord, V> Collection for TreeReadGuard<'a, K, V> {
+    type Item = V;
+}
+impl<'a, K: Ord, V> CollectionRef for TreeReadGuard<'a, K, V> {
+    type ItemRef<'b> = &'b V where Self: 'b;
+    covariant_item_ref!();
+}
+impl<'a, K: Ord, V> Len for TreeReadGuard<'a, K, V> {
+    #[inline(always)]
+    fn len(&self) -> usize {
+        self.tree.len()
+    }
+    #[inline(always)]
+    fn is_empty(&self) -> bool {
+        self.tree.is_empty()
+    }
+}
+impl<'a, 'b, K: Ord, V> Get<&'b K> for TreeReadGuard<'a, K, V> {
+    #[inline(always)]
+    fn get(&self, key: &'b K) -> Option<Self::ItemRef<'_>> {
+        self.get(key)
+    }
+    #[inline(always)]
+    fn contains(&self, key: &'b K) -> bool {
+        self.contains(key)
+    }
+}
+impl<'a, K: Ord, V> Keyed for TreeReadGuard<'a, K, V> {
+    type Key = K;
+}
+impl<'a, K: Ord, V> KeyedRef for TreeReadGuard<'a, K, V> {
+    type KeyRef<'b> = &'b K where Self: 'b;
+    covariant_key_ref!();
+}
+impl<'a, 'b, K: Ord, V> GetKeyValue<&'b K> for TreeReadGuard<'a, K, V> {
+    #[inline]
+    fn get_key_value(&self, key: &K) -> Option<(Self::KeyRef<'_>, Self::ItemRef<'_>)> {
+        match Tree::search(self.tree.root, key, &self.nodes) {
+            SearchResult::Here(ptr) => {
+                let node = &self.nodes[ptr];
+                Some((&node.key, &node.value))
+            },
+            _ => None
+        }
+    }
+}
+impl<'a, 'b, K: Ord, V> Index<&'b K> for TreeReadGuard<'a, K, V> {
+    type Output = V;
+    #[inline]
+    fn index(&self, key: &K) -> &Self::Output {
+        match self.get(key) {
+            Some(value) => value,
+            None => panic!("invalid key")
+        }
+    }
+}
+
+pub struct TreeWriteGuard<'a, K: Ord, V> {
+    tree: &'a Tree<K, V>,
+    nodes: PortWriteGuard<'a, Node<K, V>>
+}
+impl<'a, K: Ord, V> TreeWriteGuard<'a, K, V> {
+    #[inline]
+    pub fn get(&self, key: &K) -> Option<&V> {
+        match Tree::search(self.tree.root, key, &self.nodes) {
+            SearchResult::Here(ptr) => Some(&self.nodes[ptr].value),
+            _ => None
+        }
+    }
+    #[inline]
+    pub fn contains(&self, key: &K) -> bool {
+        matches!(Tree::search(self.tree.root, key, &self.nodes), SearchResult::Here(_))
+    }
+    #[inline]
+    pub fn get_mut(&mut self, key: &K) -> Option<&mut V> {
+        match Tree::search(self.tree.root, key, &self.nodes) {
+            SearchResult::Here(ptr) => Some(&mut self.nodes[ptr].value),
+            _ => None
+        }
+    }
+    #[inline]
+    pub fn get_many_mut<const N: usize>(&mut self, keys: [&K; N]) -> Result<[&mut V; N], Error> {
+        let mut ptrs = MaybeUninit::uninit_array::<N>();
+        for (ptr, key) in ptrs.iter_mut().zip(keys) {
+            match Tree::search(self.tree.root, key, &self.nodes) {
+                SearchResult::Here(found) => _ = ptr.write(found),
+                _ => Err(Error::GetManyMut)?
+            }
+        }
+        let ptrs = unsafe { MaybeUninit::array_assume_init(ptrs) };
+        let nodes = self.nodes.get_many_mut(ptrs)?;
+        let mut result = MaybeUninit::uninit_array::<N>();
+        for (result, node) in result.iter_mut().zip(nodes) {
+            result.write(&mut node.value);
+        }
+        Ok(unsafe { MaybeUninit::array_assume_init(result) })
+    }
+}
+impl<'a, K: Ord, V> Collection for TreeWriteGuard<'a, K, V> {
+    type Item = V;
+}
+impl<'a, K: Ord, V> CollectionRef for TreeWriteGuard<'a, K, V> {
+    type ItemRef<'b> = &'b V where Self: 'b;
+    covariant_item_ref!();
+}
+impl<'a, K: Ord, V> CollectionMut for TreeWriteGuard<'a, K, V> {
+    type ItemMut<'b> = &'b mut V where Self: 'b;
+    covariant_item_mut!();
+}
+impl<'a, K: Ord, V> Len for TreeWriteGuard<'a, K, V> {
+    #[inline(always)]
+    fn len(&self) -> usize {
+        self.tree.len()
+    }
+    #[inline(always)]
+    fn is_empty(&self) -> bool {
+        self.tree.is_empty()
+    }
+}
+impl<'a, 'b, K: Ord, V> Get<&'b K> for TreeWriteGuard<'a, K, V> {
+    #[inline(always)]
+    fn get(&self, key: &'b K) -> Option<Self::ItemRef<'_>> {
+        self.get(key)
+    }
+    #[inline(always)]
+    fn contains(&self, key: &'b K) -> bool {
+        self.contains(key)
+    }
+}
+impl<'a, 'b, K: Ord, V> GetMut<&'b K> for TreeWriteGuard<'a, K, V> {
+    #[inline(always)]
+    fn get_mut(&mut self, key: &'b K) -> Option<Self::ItemMut<'_>> {
+        self.get_mut(key)
+    }
+}
+impl<'a, 'b, K: Ord, V> GetManyMut<&'b K> for TreeWriteGuard<'a, K, V> {
+    type Error = Error;
+    #[inline(always)]
+    fn get_many_mut<const N: usize>(&mut self, keys: [&'b K; N]) -> Result<[Self::ItemMut<'_>; N], Self::Error> {
+        self.get_many_mut(keys)
+    }
+}
+impl<'a, K: Ord, V> Keyed for TreeWriteGuard<'a, K, V> {
+    type Key = K;
+}
+impl<'a, K: Ord, V> KeyedRef for TreeWriteGuard<'a, K, V> {
+    type KeyRef<'b> = &'b K where Self: 'b;
+    covariant_key_ref!();
+}
+impl<'a, 'b, K: Ord, V> GetKeyValue<&'b K> for TreeWriteGuard<'a, K, V> {
+    #[inline]
+    fn get_key_value(&self, key: &K) -> Option<(Self::KeyRef<'_>, Self::ItemRef<'_>)> {
+        match Tree::search(self.tree.root, key, &self.nodes) {
+            SearchResult::Here(ptr) => {
+                let node = &self.nodes[ptr];
+                Some((&node.key, &node.value))
+            },
+            _ => None
+        }
+    }
+}
+impl<'a, 'b, K: Ord, V> GetKeyValueMut<&'b K> for TreeWriteGuard<'a, K, V> {
+    fn get_key_value_mut(&mut self, key: &'b K) -> Option<(Self::KeyRef<'_>, Self::ItemMut<'_>)> {
+        match Tree::search(self.tree.root, key, &self.nodes) {
+            SearchResult::Here(ptr) => {
+                let node = &mut self.nodes[ptr];
+                Some((&node.key, &mut node.value))
+            },
+            _ => None
+        }
+    }
+}
+impl<'a, 'b, K: Ord, V> Index<&'b K> for TreeWriteGuard<'a, K, V> {
+    type Output = V;
+    #[inline]
+    fn index(&self, key: &K) -> &Self::Output {
+        match self.get(key) {
+            Some(value) => value,
+            None => panic!("invalid key")
+        }
+    }
+}
+impl<'a, 'b, K: Ord, V> IndexMut<&'b K> for TreeWriteGuard<'a, K, V> {
+    #[inline]
+    fn index_mut(&mut self, key: &'b K) -> &mut Self::Output {
+        match self.get_mut(key) {
+            Some(value) => value,
+            None => panic!("invalid key")
         }
     }
 }
