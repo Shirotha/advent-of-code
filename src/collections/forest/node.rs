@@ -1,10 +1,13 @@
 use super::*;
 
+#[repr(u8)]
 #[derive_const(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Color {
-    Black,
-    Red
+    Red = 0,
+    Black = 1,
 }
+
+// TODO: implement Cumulants as CumulantType trait + NoCumulant/WithCumulant(data, update_callback) structs
 
 #[derive(Debug)]
 pub(super) struct Node<K, V> {

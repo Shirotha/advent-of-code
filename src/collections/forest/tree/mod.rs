@@ -44,17 +44,16 @@ pub struct Tree<K, V> {
     pub(super) port: Port<Node<K, V>>,
     pub(super) root: NodeRef,
     pub(super) bounds: [NodeRef; 2],
-    len: usize
 }
 
 impl<K, V> Tree<K, V> {
     #[inline(always)]
-    const fn len(&self) -> usize {
-        self.len
+    fn len(&self) -> usize {
+        self.port.len()
     }
     #[inline(always)]
-    const fn is_empty(&self) -> bool {
-        self.len == 0
+    fn is_empty(&self) -> bool {
+        self.port.is_empty()
     }
     #[inline]
     fn rotate<const I: usize>(ptr: NodeIndex,
@@ -162,18 +161,13 @@ impl<K: Ord, V> Tree<K, V>
                 // Case 1
                 self.root = Some(ptr);
                 self.bounds = [Some(ptr), Some(ptr)];
-                self.len = 1;
             },
-            SearchResult::LeftOf(parent) => {
+            SearchResult::LeftOf(parent) =>
                 // SAFETY: search was succesful, so tree cannot be empty
-                Self::insert_at::<0>(ptr, parent, &mut self.root.unwrap(), &mut self.bounds, &mut nodes);
-                self.len += 1;
-            },
-            SearchResult::RightOf(parent) => {
+                Self::insert_at::<0>(ptr, parent, &mut self.root.unwrap(), &mut self.bounds, &mut nodes),
+            SearchResult::RightOf(parent) =>
                 // SAFETY: search was succesful, so tree cannot be empty
-                Self::insert_at::<1>(ptr, parent, &mut self.root.unwrap(), &mut self.bounds, &mut nodes);
-                self.len += 1;
-            }
+                Self::insert_at::<1>(ptr, parent, &mut self.root.unwrap(), &mut self.bounds, &mut nodes)
         }
         Ok(())
     }
@@ -272,7 +266,6 @@ impl<K: Ord, V> Tree<K, V>
         let mut nodes = self.port.write();
         match Self::search(self.root, &key, &nodes) {
             SearchResult::Here(ptr) => {
-                self.len -= 1;
                 Self::remove_at(ptr, &mut self.root, &mut self.bounds, &mut nodes);
                 drop(nodes);
                 // SAFETY: node was found, so it exists
@@ -438,5 +431,9 @@ impl<K: Ord, V> Tree<K, V>
                 return;
             }
         }
+    }
+    #[inline(always)]
+    pub fn clear(&mut self) {
+        self.port.clear()
     }
 }
