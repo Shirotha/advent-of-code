@@ -34,7 +34,6 @@ impl<'a, K: Ord, V> Reader<&K> for TreeReadGuard<'a, K, V> {
         matches!(Tree::search(self.tree.root, key, &self.nodes), SearchResult::Here(_))
     }
 }
-impl_Index_for_Reader!(&K, TreeReadGuard<'a, K, V> where K: Ord);
 
 #[derive(Debug)]
 pub struct TreeWriteGuard<'a, K: Ord, V> {

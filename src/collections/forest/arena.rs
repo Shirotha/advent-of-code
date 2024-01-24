@@ -226,7 +226,6 @@ impl<'a, T> Reader<Index> for PortReadGuard<'a, T> {
         self.arena().contains(index)
     }
 }
-impl_Index_for_Reader!(Index, PortReadGuard<'a, T>);
 
 #[derive(Debug)]
 pub(super) struct PortWriteGuard<'a, T> {
@@ -256,7 +255,6 @@ impl<'a, T> Reader<Index> for PortWriteGuard<'a, T> {
         self.arena().contains(index)
     }
 }
-impl_Index_for_Reader!(Index, PortWriteGuard<'a, T>);
 impl<'a, T> Writer<Index, Error> for PortWriteGuard<'a, T> {
     #[inline]
     fn get_mut(&mut self, index: Index) -> Option<&mut T> {
@@ -267,7 +265,6 @@ impl<'a, T> Writer<Index, Error> for PortWriteGuard<'a, T> {
         self.arena_mut().get_many_mut(indices)
     }
 }
-impl_IndexMut_for_Writer!(Index, PortWriteGuard<'a, T>);
 
 #[derive(Debug)]
 pub(super) struct PortAllocGuard<'a, T> {
@@ -317,7 +314,6 @@ impl<'a, T> Reader<Index> for PortAllocGuard<'a, T> {
         self.arena().contains(index)
     }
 }
-impl_Index_for_Reader!(Index, PortAllocGuard<'a, T>);
 impl<'a, T> Writer<Index, Error> for PortAllocGuard<'a, T> {
     #[inline]
     fn get_mut(&mut self, index: Index) -> Option<&mut T> {
@@ -328,4 +324,31 @@ impl<'a, T> Writer<Index, Error> for PortAllocGuard<'a, T> {
         self.arena_mut().get_many_mut(indices)
     }
 }
-impl_IndexMut_for_Writer!(Index, PortAllocGuard<'a, T>);
+
+macro_rules! impl_Index {
+    ( $type:ident ) => {
+        impl<'a, T> IndexRO<Index> for $type <'a, T> {
+            type Output = T;
+            #[inline]
+            fn index(&self, index: Index) -> &Self::Output {
+                self.get(index).unwrap()
+            }
+        }
+    };
+}
+impl_Index!(PortReadGuard);
+impl_Index!(PortWriteGuard);
+impl_Index!(PortAllocGuard);
+
+macro_rules! impl_IndexMut {
+    ( $type:ident ) => {
+        impl<'a, T> IndexMut<Index> for $type <'a, T> {
+            #[inline]
+            fn index_mut(&mut self, index: Index) -> &mut Self::Output {
+                self.get_mut(index).unwrap()
+            }
+        }
+    };
+}
+impl_IndexMut!(PortWriteGuard);
+impl_IndexMut!(PortAllocGuard);
