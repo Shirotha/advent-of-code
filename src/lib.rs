@@ -19,6 +19,9 @@
 #![feature(never_type)]
 #![feature(never_type_fallback)]
 #![feature(sync_unsafe_cell)]
+#![feature(vec_push_within_capacity)]
+#![feature(anonymous_lifetime_in_impl_trait)]
+#![feature(trait_alias)]
 
 #![allow(internal_features)]
 #![feature(rustc_attrs)]

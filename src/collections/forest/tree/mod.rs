@@ -44,20 +44,21 @@ pub struct Tree<K, V> {
     pub(super) port: Port<Node<K, V>>,
     pub(super) root: NodeRef,
     pub(super) bounds: [NodeRef; 2],
+    pub(super) len: usize
 }
 
 impl<K, V> Tree<K, V> {
     #[inline(always)]
-    fn len(&self) -> usize {
-        self.port.len()
+    const fn len(&self) -> usize {
+        self.len
     }
     #[inline(always)]
-    fn is_empty(&self) -> bool {
-        self.port.is_empty()
+    const fn is_empty(&self) -> bool {
+        self.len == 0
     }
     #[inline]
     fn rotate<const I: usize>(ptr: NodeIndex,
-        root: &mut NodeIndex, nodes: &mut PortWriteGuard<Node<K, V>>
+        root: &mut NodeIndex, nodes: &mut impl NodeWriter<K, V>
     ) where [(); 1 - I]: {
         // ASSERT: node has a non-null right child
         let node = &nodes[ptr];
@@ -86,11 +87,9 @@ impl<K, V> Tree<K, V> {
 impl<K: Ord, V> Tree<K, V>
 {
     #[inline]
-    fn search<C>(mut ptr: NodeRef, key: &K,
-        nodes: &C
-    ) -> SearchResult<NodeIndex>
-        where C: Index<NodeIndex, Output = Node<K, V>>
-    {
+    fn search(mut ptr: NodeRef, key: &K,
+        nodes: &impl NodeReader<K, V>
+    ) -> SearchResult<NodeIndex> {
         let (mut parent, mut left) = (None, false);
         while let Some(valid) = ptr {
             parent = ptr;
@@ -123,27 +122,24 @@ impl<K: Ord, V> Tree<K, V>
     }
     #[inline]
     pub fn insert(&mut self, key: K, value: V) -> bool {
-        let mut nodes = self.port.write();
+        let mut nodes = self.port.alloc();
         match Self::search(self.root, &key, &nodes) {
             SearchResult::Here(ptr) => {
                 nodes[ptr].value = value;
                 return false;
             },
             SearchResult::Empty => {
-                drop(nodes);
-                let ptr = Some(self.port.insert(Node::new(key, value)));
+                let ptr = Some(nodes.insert(Node::new(key, value)));
                 self.root = ptr;
                 self.bounds = [ptr, ptr]
             },
             SearchResult::LeftOf(parent) => {
-                drop(nodes);
-                let ptr = self.port.insert(Node::new(key, value));
+                let ptr = nodes.insert(Node::new(key, value));
                 let mut nodes = self.port.write();
                 Self::insert_at::<0>(ptr, parent, &mut self.root.unwrap(), &mut self.bounds, &mut nodes);
             },
             SearchResult::RightOf(parent) => {
-                drop(nodes);
-                let ptr = self.port.insert(Node::new(key, value));
+                let ptr = nodes.insert(Node::new(key, value));
                 let mut nodes = self.port.write();
                 Self::insert_at::<1>(ptr, parent, &mut self.root.unwrap(), &mut self.bounds, &mut nodes);
             }
@@ -174,7 +170,7 @@ impl<K: Ord, V> Tree<K, V>
     #[inline]
     fn insert_at<const I: usize>(ptr: NodeIndex, parent: NodeIndex,
         root: &mut NodeIndex, bounds: &mut [NodeRef; 2],
-        nodes: &mut PortWriteGuard<Node<K, V>>
+        nodes: &mut impl NodeWriter<K, V>
     ) where [(); 1 - I]: {
         // ASSERT: child I is null
         let mut order = [None, None];
@@ -196,12 +192,14 @@ impl<K: Ord, V> Tree<K, V>
     }
     #[inline]
     fn fix_insert(mut ptr: NodeIndex,
-        root: &mut NodeIndex, nodes: &mut PortWriteGuard<Node<K, V>>
+        root: &mut NodeIndex,
+        nodes: &mut impl NodeWriter<K, V>
     ) {
         // ASSERT: node has a non-null grand-parent
         #[inline]
         fn helper<const I: usize, const J: usize, K, V>(mut ptr: NodeIndex, parent: NodeIndex, grandparent: NodeIndex,
-            root: &mut NodeIndex, nodes: &mut PortWriteGuard<Node<K, V>>
+            root: &mut NodeIndex,
+            nodes: &mut impl NodeWriter<K, V>
         ) -> Option<NodeIndex>
             where [(); 1 - I]:, [(); 1 - J]:, [(); 1 - (1 - I)]:
         {
@@ -263,13 +261,12 @@ impl<K: Ord, V> Tree<K, V>
     }
     #[inline]
     pub fn remove(&mut self, key: K) -> Option<V> {
-        let mut nodes = self.port.write();
+        let mut nodes = self.port.alloc();
         match Self::search(self.root, &key, &nodes) {
             SearchResult::Here(ptr) => {
                 Self::remove_at(ptr, &mut self.root, &mut self.bounds, &mut nodes);
-                drop(nodes);
                 // SAFETY: node was found, so it exists
-                Some(self.port.remove(ptr).unwrap().value)
+                Some(nodes.remove(ptr).unwrap().value)
             }
             _ => None
         }
@@ -277,7 +274,7 @@ impl<K: Ord, V> Tree<K, V>
     #[inline]
     pub(super) fn remove_at(ptr: NodeIndex,
         root: &mut NodeRef, bounds: &mut [NodeRef; 2],
-        nodes: &mut PortWriteGuard<Node<K, V>>,
+        nodes: &mut impl NodeWriter<K, V>
     ) {
         // ASSERT: root is the root of node
         unwrap! { (): {
@@ -339,7 +336,8 @@ impl<K: Ord, V> Tree<K, V>
     }
     #[inline]
     fn transplant(ptr: NodeIndex, child: NodeRef,
-        root: &mut NodeRef, nodes: &mut PortWriteGuard<Node<K, V>>
+        root: &mut NodeRef,
+        nodes: &mut impl NodeWriter<K, V>
     ) {
         let parent = nodes[ptr].parent;
         discard! {
@@ -358,12 +356,14 @@ impl<K: Ord, V> Tree<K, V>
     }
     #[inline]
     fn fix_remove(mut ptr: NodeIndex,
-        root: &mut NodeIndex, nodes: &mut PortWriteGuard<Node<K, V>>
+        root: &mut NodeIndex,
+        nodes: &mut impl NodeWriter<K, V>
     ) {
         // ASSERT: node is black
         #[inline]
         fn helper<const I: usize, K, V>(mut ptr: NodeIndex, mut parent: NodeIndex,
-            root: &mut NodeIndex, nodes: &mut PortWriteGuard<Node<K, V>>
+            root: &mut NodeIndex,
+            nodes: &mut impl NodeWriter<K, V>
         ) -> NodeIndex
             where [(); 1 - I]:, [(); 1 - (1 - I)]:
         {
@@ -432,8 +432,16 @@ impl<K: Ord, V> Tree<K, V>
             }
         }
     }
-    #[inline(always)]
+    #[inline]
     pub fn clear(&mut self) {
-        self.port.clear()
+        let mut port = self.port.alloc();
+        let mut ptr = self.bounds[0];
+        while let Some(index) = ptr {
+            ptr = port[index].order[1];
+            port.remove(index);
+        }
+        self.root = None;
+        self.bounds = [None, None];
+        self.len = 0;
     }
 }
