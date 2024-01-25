@@ -1,3 +1,7 @@
+workspace = { members = [
+    "crates/rb-forest"
+] }
+
 [package]
 name = "advent-of-code"
 version = "0.1.0"
@@ -28,7 +32,6 @@ cc-traits = { version = "2.0.0", features = ["std", "smallvec"] }
 petgraph = "0.6.4"
 keyed_priority_queue = "0.4.2"
 tailcall = "1.0.1"
-parking_lot = { version = "0.12.1", features = ["nightly", "hardware-lock-elision", "deadlock_detection"] }
 #modular-bitfield = "0.11.2"
 
 [dev-dependencies]

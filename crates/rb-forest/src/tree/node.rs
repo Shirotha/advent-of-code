@@ -1,8 +1,11 @@
-use super::*;
+use crate::arena::Index;
+
+pub type NodeIndex = Index;
+pub type NodeRef = Option<NodeIndex>;
 
 #[repr(u8)]
 #[derive_const(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Color {
+pub enum Color {
     Red = 0,
     Black = 1,
 }
@@ -10,18 +13,18 @@ pub(super) enum Color {
 // TODO: implement Cumulants as CumulantType trait + NoCumulant/WithCumulant(data, update_callback) structs
 
 #[derive(Debug)]
-pub(super) struct Node<K, V> {
-    pub(super) key: K,
-    pub(super) value: V,
-    pub(super) color: Color,
-    pub(super) parent: NodeRef,
-    pub(super) children: [NodeRef; 2],
-    pub(super) order: [NodeRef; 2]
+pub struct Node<K, V> {
+    pub(crate) key: K,
+    pub(crate) value: V,
+    pub(crate) color: Color,
+    pub(crate) parent: NodeRef,
+    pub(crate) children: [NodeRef; 2],
+    pub(crate) order: [NodeRef; 2]
 }
 
 impl<K, V> Node<K, V> {
     #[inline]
-    pub(super) const fn new(key: K, value: V) -> Self {
+    pub const fn new(key: K, value: V) -> Self {
         Self {
             key, value,
             color: Color::Black,
@@ -31,18 +34,18 @@ impl<K, V> Node<K, V> {
         }
     }
     #[inline(always)]
-    pub(super) const fn is_root(&self) -> bool {
+    pub const fn is_root(&self) -> bool {
         self.parent.is_none()
     }
     #[inline(always)]
-    pub(super) const fn is_black(&self) -> bool {
+    pub const fn is_black(&self) -> bool {
         match self.color {
             Color::Black => true,
             Color::Red => false
         }
     }
     #[inline(always)]
-    pub(super) const fn is_red(&self) -> bool {
+    pub const fn is_red(&self) -> bool {
         match self.color {
             Color::Black => false,
             Color::Red => true
