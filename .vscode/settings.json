@@ -1,4 +1,6 @@
 {
     "rust-analyzer.showUnlinkedFileNotification": false,
-    "rust-analyzer.cargo.features": ["sorted-iter"],
+    "rust-analyzer.cargo.features": [
+        "sorted-iter"
+    ],
 }
