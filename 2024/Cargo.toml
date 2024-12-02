@@ -14,3 +14,6 @@ name = "advent-of-code"
 authors.workspace = true
 version.workspace = true
 edition.workspace = true
+
+[workspace.dependencies]
+nom = "7.1.3"

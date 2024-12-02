@@ -5,6 +5,14 @@ B = "Build"
 Run = "run --release"
 R = "Run"
 
+part1 = "r --bin part1"
+p1 = "part1"
+Part1 = "R --bin part1"
+P1 = "Part1"
+part2 = "r --bin part2"
+p2 = "part2"
+Part2 = "R --bin part2"
+P2 = "Part2"
 
 
 [build]
