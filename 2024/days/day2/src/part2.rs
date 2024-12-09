@@ -2,7 +2,8 @@ use advent_of_code::*;
 use day2::*;
 
 fn solve(input: Input) -> DResult<impl ToString> {
-    todo!("implement part 2 solution here")
+    todo!("implement part 2 solution here");
+    Ok("")
 }
 
 pub fn main() -> DResult<()> {
@@ -17,7 +18,7 @@ pub fn main() -> DResult<()> {
 mod test {
     use super::*;
 
-    const RESULT: &str = todo!("insert example output here");
+    const RESULT: &str = ""; // TODO: insert example output here
 
     #[test]
     fn test() -> DResult<()> {
