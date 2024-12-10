@@ -1,9 +1,41 @@
+#![feature(array_windows)]
+
+use std::cmp::Ordering;
+
 use advent_of_code::*;
 use day2::*;
 
 fn solve(input: Input) -> DResult<impl ToString> {
-    todo!("implement part 2 solution here");
-    Ok("")
+    let mut count = 0;
+    for line in input.lines {
+        assert!(line.len() >= 2);
+        // SAFETY: unwrap: assert guaranties that line is not empty
+        let valid = match unsafe {
+            line.last()
+                .unwrap_unchecked()
+                .cmp(line.first().unwrap_unchecked())
+        } {
+            Ordering::Equal => continue,
+            Ordering::Less => -3..=-1,
+            Ordering::Greater => 1..=3,
+        };
+        let is_valid = |pair: &[i32; 2]| valid.contains(&(pair[1] - pair[0]));
+        if let Some((i, &[first, second])) = line
+            .array_windows()
+            .enumerate()
+            .find(|(_, pair)| !is_valid(pair))
+        {
+            if !((i == 0 || is_valid(&[line[i - 1], second]))
+                && line[i + 1..].array_windows().all(is_valid)
+                || (i == line.len() - 2 || is_valid(&[first, line[i + 2]]))
+                    && line[i + 2..].array_windows().all(is_valid))
+            {
+                continue;
+            }
+        }
+        count += 1;
+    }
+    Ok(count)
 }
 
 pub fn main() -> DResult<()> {
@@ -18,7 +50,7 @@ pub fn main() -> DResult<()> {
 mod test {
     use super::*;
 
-    const RESULT: &str = ""; // TODO: insert example output here
+    const RESULT: &str = "4";
 
     #[test]
     fn test() -> DResult<()> {
