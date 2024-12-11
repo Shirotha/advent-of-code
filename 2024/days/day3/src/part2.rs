@@ -2,7 +2,17 @@ use advent_of_code::*;
 use day3::*;
 
 fn solve(input: Input) -> DResult<impl ToString> {
-    todo!("implement part 2 solution here")
+    let mut sum = 0;
+    let mut enabled = true;
+    for instruction in input.instructions {
+        match instruction {
+            Instruction::Mul(a, b) if enabled => sum += a * b,
+            Instruction::Do => enabled = true,
+            Instruction::Dont => enabled = false,
+            _ => (),
+        }
+    }
+    Ok(sum)
 }
 
 pub fn main() -> DResult<()> {
@@ -17,11 +27,11 @@ pub fn main() -> DResult<()> {
 mod test {
     use super::*;
 
-    const RESULT: &str = todo!("insert example output here");
+    const RESULT: &str = "48";
 
     #[test]
     fn test() -> DResult<()> {
-        let input = include_str!("../data/example.dat");
+        let input = include_str!("../data/example2.dat");
         let input = input.parse::<Input>()?;
         let result = solve(input)?;
         assert_eq!(result.to_string(), RESULT);

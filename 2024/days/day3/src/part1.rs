@@ -26,7 +26,7 @@ mod test {
 
     #[test]
     fn test() -> DResult<()> {
-        let input = include_str!("../data/example.dat");
+        let input = include_str!("../data/example1.dat");
         let input = input.parse::<Input>()?;
         let result = solve(input)?;
         assert_eq!(result.to_string(), RESULT);
