@@ -1,0 +1,30 @@
+use advent_of_code::*;
+use day4::*;
+
+fn solve(input: Input) -> DResult<impl ToString> {
+    todo!("implement part 1 solution here")
+}
+
+pub fn main() -> DResult<()> {
+    let input = get_input()?;
+    let input = input.parse::<Input>()?;
+    let solution = solve(input)?;
+    println!("Solution: {}", solution.to_string());
+    Ok(())
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    const RESULT: &str = "18";
+
+    #[test]
+    fn test() -> DResult<()> {
+        let input = include_str!("../data/example.dat");
+        let input = input.parse::<Input>()?;
+        let result = solve(input)?;
+        assert_eq!(result.to_string(), RESULT);
+        Ok(())
+    }
+}
