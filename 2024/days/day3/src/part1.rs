@@ -2,7 +2,11 @@ use advent_of_code::*;
 use day3::*;
 
 fn solve(input: Input) -> DResult<impl ToString> {
-    todo!("implement part 1 solution here")
+    Ok(input
+        .matches
+        .into_iter()
+        .map(|args| args[0] * args[1])
+        .sum::<u32>())
 }
 
 pub fn main() -> DResult<()> {
@@ -17,7 +21,7 @@ pub fn main() -> DResult<()> {
 mod test {
     use super::*;
 
-    const RESULT: &str = todo!("insert example output here");
+    const RESULT: &str = "161";
 
     #[test]
     fn test() -> DResult<()> {
