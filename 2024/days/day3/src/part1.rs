@@ -3,9 +3,10 @@ use day3::*;
 
 fn solve(input: Input) -> DResult<impl ToString> {
     Ok(input
-        .matches
+        .instructions
         .into_iter()
-        .map(|args| args[0] * args[1])
+        .filter_map(Instruction::into_mul)
+        .map(|(a, b)| a * b)
         .sum::<u32>())
 }
 
