@@ -1,3 +1,6 @@
+mod narray;
+pub use narray::NArray;
+
 use std::io::{Read, stdin};
 
 pub type Error = Box<dyn std::error::Error>;
