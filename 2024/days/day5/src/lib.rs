@@ -13,14 +13,14 @@ use nom::{
     sequence::{preceded, separated_pair},
 };
 
-pub const FIRST_PAGE: u8 = 11;
-pub const LAST_PAGE: u8 = 99;
-pub const PAGES: RangeInclusive<u8> = FIRST_PAGE..=LAST_PAGE;
-pub const PAGE_COUNT: u8 = LAST_PAGE - FIRST_PAGE + 1;
+pub const FIRST_PAGE: usize = 11;
+pub const LAST_PAGE: usize = 99;
+pub const PAGES: RangeInclusive<usize> = FIRST_PAGE..=LAST_PAGE;
+pub const PAGE_COUNT: usize = LAST_PAGE - FIRST_PAGE + 1;
 
 #[derive(Debug)]
 pub struct Input {
-    pub rules: [Box<[Box<[u8]>]>; 2],
+    pub rules: Box<[Box<[u8]>]>,
     pub orders: Box<[Box<[u8]>]>,
 }
 impl FromStr for Input {
@@ -41,25 +41,14 @@ impl FromStr for Input {
         let (s, rules) = separated_list1(line_ending, rule)(s).map_err(|e| e.to_owned())?;
         let (_, orders) = preceded(multispace0, separated_list1(line_ending, order))(s)
             .map_err(|e| e.to_owned())?;
-        let mut forward_rules = (0..PAGE_COUNT).map(|_| Vec::new()).collect::<Box<_>>();
-        let mut backwards_rules = (0..PAGE_COUNT).map(|_| Vec::new()).collect::<Box<_>>();
+        let mut edges = vec![Vec::new(); PAGE_COUNT];
         for (from, to) in rules {
-            assert!(PAGES.contains(&from));
-            assert!(PAGES.contains(&to));
-            forward_rules[from as usize].push(to);
-            backwards_rules[to as usize].push(from);
+            assert!(PAGES.contains(&(from as usize)));
+            assert!(PAGES.contains(&(to as usize)));
+            edges[from as usize - FIRST_PAGE].push(to - FIRST_PAGE as u8);
         }
         Ok(Input {
-            rules: [
-                forward_rules
-                    .into_iter()
-                    .map(Vec::into_boxed_slice)
-                    .collect(),
-                backwards_rules
-                    .into_iter()
-                    .map(Vec::into_boxed_slice)
-                    .collect(),
-            ],
+            rules: edges.into_iter().map(Vec::into_boxed_slice).collect(),
             orders: orders.into_boxed_slice(),
         })
     }
