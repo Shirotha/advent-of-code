@@ -36,7 +36,9 @@ impl FromStr for Input {
             separated_pair(page, char('|'), page)(input)
         }
         fn order(input: &str) -> IResult<&str, Box<[u8]>> {
-            map(separated_list1(char(','), page), |v| v.into_boxed_slice())(input)
+            map(separated_list1(char(','), page), |v| {
+                v.into_iter().map(|x| x - FIRST_PAGE as u8).collect()
+            })(input)
         }
         let (s, rules) = separated_list1(line_ending, rule)(s).map_err(|e| e.to_owned())?;
         let (_, orders) = preceded(multispace0, separated_list1(line_ending, order))(s)

@@ -279,41 +279,30 @@ impl<const N: usize, D: DerefMut<Target: IndexMut<usize>>> NArray<N, D> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Projector<const N: usize, const M: usize>
-where
-    [(); N - M]:,
-{
+pub struct Projector<const N: usize, const M: usize> {
     ranges: [(usize, RangeInclusive<usize>); M],
-    pins: [(usize, usize); N - M],
+    pins: Box<[(usize, usize)]>,
 }
-impl<const N: usize, const M: usize> Projector<N, M>
-where
-    [(); N - M]:,
-{
-    pub const fn new(desc: &[RangeAny<usize>; N]) -> Option<Self> {
+impl<const N: usize, const M: usize> Projector<N, M> {
+    pub fn new(desc: &[RangeAny<usize>; N]) -> Option<Self> {
         let mut ranges = MaybeUninit::uninit_array();
-        let mut pins = MaybeUninit::uninit_array();
+        let mut pins = Vec::with_capacity(N - M);
         let mut range_count = 0;
-        let mut pin_count = 0;
         let mut i = 0;
         while i < N {
             match &desc[i] {
                 RangeAny::Single(pin) => {
-                    if pin_count >= { N - M } {
+                    if pins.len() >= N - M {
                         return None;
                     }
-                    pins[pin_count].write((i, *pin));
-                    pin_count += 1;
+                    pins.push((i, *pin));
                 }
                 range => {
                     if range_count >= M {
                         return None;
                     }
-                    let start = match range.start() {
-                        Some(x) => x,
-                        None => 0,
-                    };
-                    let Some(end) = range.end() else { return None };
+                    let start = range.start().unwrap_or(0);
+                    let end = range.end()?;
                     ranges[range_count].write((i, start..=end));
                     range_count += 1;
                 }
@@ -323,32 +312,27 @@ where
         // SAFETY: pin_count == P == N - M and range_count == M here (would have returned early otherwise)
         Some(Self {
             ranges: unsafe { MaybeUninit::array_assume_init(ranges) },
-            pins: unsafe { MaybeUninit::array_assume_init(pins) },
+            pins: pins.into_boxed_slice(),
         })
     }
-    pub const fn new_with_size(desc: &[RangeAny<usize>; N], size: &[usize; N]) -> Option<Self> {
+    pub fn new_with_size(desc: &[RangeAny<usize>; N], size: &[usize; N]) -> Option<Self> {
         let mut ranges = MaybeUninit::uninit_array();
-        let mut pins = MaybeUninit::uninit_array();
+        let mut pins = Vec::with_capacity(N - M);
         let mut range_count = 0;
-        let mut pin_count = 0;
         let mut i = 0;
         while i < N {
             match &desc[i] {
                 RangeAny::Single(pin) => {
-                    if pin_count >= { N - M } {
+                    if pins.len() >= N - M {
                         return None;
                     }
-                    pins[pin_count].write((i, *pin));
-                    pin_count += 1;
+                    pins.push((i, *pin));
                 }
                 range => {
                     if range_count >= M {
                         return None;
                     }
-                    let start = match range.start() {
-                        Some(x) => x,
-                        None => 0,
-                    };
+                    let start = range.start().unwrap_or(0);
                     let end = match range.end() {
                         Some(x) => x,
                         None => size[i].saturating_sub(1),
@@ -362,12 +346,12 @@ where
         // SAFETY: pin_count == P == N - M and range_count == M here (would have returned early otherwise)
         Some(Self {
             ranges: unsafe { MaybeUninit::array_assume_init(ranges) },
-            pins: unsafe { MaybeUninit::array_assume_init(pins) },
+            pins: pins.into_boxed_slice(),
         })
     }
-    pub const fn pin(&mut self, pins: &[usize; N - M]) {
+    pub const fn pin(&mut self, pins: &[usize]) {
         let mut i = 0;
-        while i < { N - M } {
+        while i < N - M {
             self.pins[i].1 = pins[i];
             i += 1;
         }
@@ -377,13 +361,10 @@ where
 const fn project<const N: usize, const M: usize, D>(
     array: &NArray<N, D>,
     proj: &Projector<N, M>,
-) -> Option<([usize; M], [usize; M], usize)>
-where
-    [(); N - M]:,
-{
+) -> Option<([usize; M], [usize; M], usize)> {
     let mut offset = 0;
     let mut i = 0;
-    while i < { N - M } {
+    while i < N - M {
         let (dim, index) = proj.pins[i];
         if index >= array.size[dim] {
             return None;
@@ -407,10 +388,7 @@ where
     Some((size, stride, offset))
 }
 impl<const N: usize, D: Deref> NArray<N, D> {
-    pub fn project<const M: usize>(&self, proj: &Projector<N, M>) -> Option<NArray<M, &D::Target>>
-    where
-        [(); N - M]:,
-    {
+    pub fn project<const M: usize>(&self, proj: &Projector<N, M>) -> Option<NArray<M, &D::Target>> {
         let (size, stride, offset) = project(self, proj)?;
         Some(NArray {
             size,
@@ -419,10 +397,10 @@ impl<const N: usize, D: Deref> NArray<N, D> {
             data: self.data.deref(),
         })
     }
-    pub fn view<const M: usize>(&self, desc: &[RangeAny<usize>; N]) -> Option<NArray<M, &D::Target>>
-    where
-        [(); N - M]:,
-    {
+    pub fn view<const M: usize>(
+        &self,
+        desc: &[RangeAny<usize>; N],
+    ) -> Option<NArray<M, &D::Target>> {
         let proj = Projector::<N, M>::new_with_size(desc, self.size())?;
         self.project(&proj)
     }
@@ -431,10 +409,7 @@ impl<const N: usize, D: DerefMut> NArray<N, D> {
     pub fn project_mut<const M: usize>(
         &mut self,
         proj: &Projector<N, M>,
-    ) -> Option<NArray<M, &mut D::Target>>
-    where
-        [(); N - M]:,
-    {
+    ) -> Option<NArray<M, &mut D::Target>> {
         let (size, stride, offset) = project(self, proj)?;
         Some(NArray {
             size,
@@ -446,10 +421,7 @@ impl<const N: usize, D: DerefMut> NArray<N, D> {
     pub fn view_mut<const M: usize>(
         &mut self,
         desc: &[RangeAny<usize>; N],
-    ) -> Option<NArray<M, &mut D::Target>>
-    where
-        [(); N - M]:,
-    {
+    ) -> Option<NArray<M, &mut D::Target>> {
         let proj = Projector::<N, M>::new_with_size(desc, self.size())?;
         self.project_mut(&proj)
     }

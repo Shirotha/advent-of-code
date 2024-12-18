@@ -10,6 +10,9 @@ const CONNECTED_OFFSET: u8 = 0;
 const CONNECTED_MASK: u8 = 1 << CONNECTED_OFFSET;
 const MARK_OFFSET: u8 = 1;
 const MARK_MASK: u8 = 1 << MARK_OFFSET;
+// DEBUG: cycle detection
+const CLOSED_OFFSET: u8 = 2;
+const CLOSED_MASK: u8 = 1 << CLOSED_OFFSET;
 
 fn solve(input: Input) -> DResult<impl ToString> {
     fn visit(
@@ -35,15 +38,20 @@ fn solve(input: Input) -> DResult<impl ToString> {
                     *x = connected << BACKWARDS_OFFSET | *x & !BACKWARDS_MASK;
                 }
             }
+        // DEBUG: cycle detection
+        } else if row[page] & CLOSED_MASK == 0 {
+            panic!("cycle detected!");
         }
         for (i, x) in row.iter_mut().enumerate() {
             let forward = connections[[i, page]] & FORWARD_MASK >> FORWARD_OFFSET;
             *x = forward << CONNECTED_OFFSET | *x & !CONNECTED_MASK;
         }
+        // DEBUG: cycle detction
+        row[page] |= CLOSED_MASK;
     }
     let mut connections = NArray::<2, Box<[u8]>>::new([PAGE_COUNT; 2]);
     let mut row = vec![0; PAGE_COUNT].into_boxed_slice();
-    for page in PAGES {
+    for page in 0..PAGE_COUNT {
         if row[page] & MARK_MASK == 0 {
             visit(&input.rules, &mut connections, &mut row, page);
         }
@@ -60,7 +68,7 @@ fn solve(input: Input) -> DResult<impl ToString> {
             let mut valid = true;
             let mut connected = false;
             open.retain(|&open| {
-                match connections[[page, open]] {
+                match connections[[open, page]] {
                     FORWARD_MASK => {
                         connected = true;
                         false
@@ -70,8 +78,9 @@ fn solve(input: Input) -> DResult<impl ToString> {
                         true
                     }
                     0 => true,
+                    // FIXME: connections contains a cycle
                     // SAFETY: graph is acyclic
-                    _ => unreachable!(),
+                    _ => unreachable!("cycle detected"),
                 }
             });
             if !valid {
