@@ -1,0 +1,17 @@
+[package]
+name = "day5"
+authors.workspace = true
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "part1"
+path = "src/part1.rs"
+
+[[bin]]
+name = "part2"
+path = "src/part2.rs"
+
+[dependencies]
+advent-of-code = { path = "../.." }
+nom.workspace = true

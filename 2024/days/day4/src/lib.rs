@@ -1,12 +1,9 @@
-use std::{
-    mem::transmute,
-    ops::{Index, IndexMut},
-    str::FromStr,
-};
+use advent_of_code::*;
+use std::{mem::transmute, str::FromStr};
 
 #[derive(Debug)]
 pub struct Input {
-    pub data: StridedMatrix<u8>,
+    pub data: NArray<2, Box<[u8]>>,
 }
 impl FromStr for Input {
     type Err = nom::Err<nom::error::Error<String>>;
@@ -32,7 +29,10 @@ impl FromStr for Input {
             width + 2
         };
         Ok(Input {
-            data: StridedMatrix::from_buffer(s, [width, height], stride),
+            // SAFETY: size and stride were calculated from s
+            data: unsafe {
+                NArray::from_buffer_with_stride_unchecked(s.into(), [width, height], [1, stride])
+            },
         })
     }
 }
@@ -109,78 +109,4 @@ pub const fn shift(
         _ => return None,
     };
     Some([x, y])
-}
-
-#[derive(Debug)]
-pub struct StridedMatrix<T> {
-    data: Box<[T]>,
-    size: [usize; 2],
-    stride: usize,
-}
-impl<T> StridedMatrix<T> {
-    pub fn from_buffer(data: impl Into<Box<[T]>>, size: [usize; 2], stride: usize) -> Self {
-        let data = data.into();
-        assert!(size[0] > 0 && size[1] > 0, "matrix can't be empty");
-        assert!(
-            data.len() >= (size[1] - 1) * stride + size[0],
-            "buffer not big enough"
-        );
-        Self { data, size, stride }
-    }
-    pub const fn size(&self) -> &[usize; 2] {
-        &self.size
-    }
-}
-impl<T: Default> StridedMatrix<T> {
-    pub fn new(size: [usize; 2]) -> Self {
-        let data = (0..size[0] * size[1]).map(|_| T::default()).collect();
-        Self {
-            data,
-            size,
-            stride: size[0],
-        }
-    }
-}
-impl<T> Index<[usize; 2]> for StridedMatrix<T> {
-    type Output = T;
-
-    fn index(&self, index: [usize; 2]) -> &Self::Output {
-        &self.data[index[1] * self.stride + index[0]]
-    }
-}
-impl<T> IndexMut<[usize; 2]> for StridedMatrix<T> {
-    fn index_mut(&mut self, index: [usize; 2]) -> &mut Self::Output {
-        &mut self.data[index[1] * self.stride + index[0]]
-    }
-}
-pub struct Iter<'a, T> {
-    data: &'a StridedMatrix<T>,
-    current: [usize; 2],
-}
-impl<'a, T> Iterator for Iter<'a, T> {
-    type Item = ([usize; 2], &'a T);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let size = *self.data.size();
-        if self.current[1] == size[1] {
-            return None;
-        }
-        let result = (self.current, &self.data[self.current]);
-        self.current[0] += 1;
-        if self.current[0] == size[0] {
-            self.current = [0, self.current[1] + 1];
-        }
-        Some(result)
-    }
-}
-impl<'a, T> IntoIterator for &'a StridedMatrix<T> {
-    type IntoIter = Iter<'a, T>;
-    type Item = <Self::IntoIter as Iterator>::Item;
-
-    fn into_iter(self) -> Self::IntoIter {
-        Iter {
-            data: self,
-            current: [0, 0],
-        }
-    }
 }

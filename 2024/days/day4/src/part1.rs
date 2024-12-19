@@ -3,7 +3,7 @@ use day4::*;
 
 fn solve(input: Input) -> DResult<impl ToString> {
     let size = *input.data.size();
-    let mut matches = StridedMatrix::<u32>::new(size);
+    let mut matches = NArray::<2, Box<[u32]>>::new(size);
     let mut update = |pos: [usize; 2], dir: Dir, index: usize| {
         // SAFETY: assumes that other_pos is in-bounds
         let other_pos = shift(pos, size, dir, 1).unwrap();
@@ -20,6 +20,11 @@ fn solve(input: Input) -> DResult<impl ToString> {
             }
         }
     };
+    println!(
+        "size: {:?}, stride: {:?}",
+        input.data.size(),
+        input.data.stride()
+    );
     for (pos, &char) in &input.data {
         let Some(index) = linear_search(&WORD, char) else {
             continue;
