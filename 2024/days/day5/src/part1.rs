@@ -3,7 +3,7 @@
 use advent_of_code::*;
 use day5::*;
 
-/* NOTE: this solution assumes that all rules are allways active, which is no the case here
+/* NOTE: this solution assumes that all rules are always active, which is not the case here
 const FORWARD_OFFSET: u8 = 0;
 const FORWARD_MASK: u8 = 1 << FORWARD_OFFSET;
 const BACKWARDS_OFFSET: u8 = 1;
