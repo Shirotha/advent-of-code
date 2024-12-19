@@ -20,11 +20,6 @@ fn solve(input: Input) -> DResult<impl ToString> {
             }
         }
     };
-    println!(
-        "size: {:?}, stride: {:?}",
-        input.data.size(),
-        input.data.stride()
-    );
     for (pos, &char) in &input.data {
         let Some(index) = linear_search(&WORD, char) else {
             continue;

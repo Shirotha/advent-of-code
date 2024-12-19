@@ -1,5 +1,5 @@
 use advent_of_code::*;
-use std::{mem::transmute, str::FromStr};
+use std::{convert::identity, mem::transmute, str::FromStr};
 
 #[derive(Debug)]
 pub struct Input {
@@ -10,29 +10,10 @@ impl FromStr for Input {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         // SAFETY: assumes that input is in ASCII
-        let s = s.as_bytes();
-        // SAFETY: assumes trailing new-line
-        let height = s.iter().filter(|c| **c == b'\n').count();
-        let width = if height != 1 {
-            // SAFETY: unwrap: if height is > 1 there is at least one line ending
-            s.iter()
-                .enumerate()
-                .find(|&(_, &c)| c == b'\r' || c == b'\n')
-                .unwrap()
-                .0
-        } else {
-            s.len()
-        };
-        let stride = if s[width] == b'\n' {
-            width + 1
-        } else {
-            width + 2
-        };
+        let s: Box<[_]> = s.as_bytes().into();
+        let len = s.len();
         Ok(Input {
-            // SAFETY: size and stride were calculated from s
-            data: unsafe {
-                NArray::from_buffer_with_stride_unchecked(s.into(), [width, height], [1, stride])
-            },
+            data: NArray::from_ascii(s, 0..len).map_or_else(identity, identity),
         })
     }
 }

@@ -1,7 +1,7 @@
 use std::{
     hint::black_box,
     mem::MaybeUninit,
-    ops::{Deref, DerefMut, Index, IndexMut, RangeInclusive},
+    ops::{Deref, DerefMut, Index, IndexMut, Range, RangeInclusive},
 };
 
 use crate::RangeAny;
@@ -169,6 +169,61 @@ impl<const N: usize, D: Deref<Target: Index<usize>>> NArray<N, D> {
             stride,
             offset: 0,
             data,
+        }
+    }
+}
+impl<D: Deref<Target: Index<usize, Output = u8>>> NArray<2, D> {
+    pub fn from_ascii(data: D, range: Range<usize>) -> Result<Self, Self> {
+        let offset = range.start;
+        let len = range.end - offset;
+        let until_eol = |start| {
+            let mut index = start;
+            while index < len {
+                let char = data[offset + index];
+                if char == b'\r' || char == b'\n' {
+                    break;
+                }
+                index += 1;
+            }
+            index - start
+        };
+        let width = until_eol(offset);
+        if width == 0 {
+            let result = Self {
+                data,
+                size: [0, 0],
+                stride: [0, 0],
+                offset,
+            };
+            return if len > 0 { Err(result) } else { Ok(result) };
+        }
+        if width + 1 == len || width + 2 == len {
+            return Ok(Self {
+                data,
+                size: [width, 1],
+                stride: [1, width],
+                offset,
+            });
+        }
+        let next = data[offset + width + 2];
+        let line_ending = if next == b'\r' || next == b'\n' { 2 } else { 1 };
+        let stride = width + line_ending;
+        let mut height = 1;
+        let mut index = stride;
+        while until_eol(index) == width {
+            height += 1;
+            index += stride;
+        }
+        let result = Self {
+            data,
+            size: [width, height],
+            stride: [1, stride],
+            offset,
+        };
+        if index + 1 == len || index + 1 + line_ending == len {
+            Ok(result)
+        } else {
+            Err(result)
         }
     }
 }
