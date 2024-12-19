@@ -1,6 +1,9 @@
+#![feature(array_windows)]
+
 use advent_of_code::*;
 use day5::*;
 
+/* NOTE: this solution assumes that all rules are allways active, which is no the case here
 const FORWARD_OFFSET: u8 = 0;
 const FORWARD_MASK: u8 = 1 << FORWARD_OFFSET;
 const BACKWARDS_OFFSET: u8 = 1;
@@ -10,7 +13,6 @@ const CONNECTED_OFFSET: u8 = 0;
 const CONNECTED_MASK: u8 = 1 << CONNECTED_OFFSET;
 const MARK_OFFSET: u8 = 1;
 const MARK_MASK: u8 = 1 << MARK_OFFSET;
-// DEBUG: cycle detection
 const CLOSED_OFFSET: u8 = 2;
 const CLOSED_MASK: u8 = 1 << CLOSED_OFFSET;
 
@@ -38,7 +40,6 @@ fn solve(input: Input) -> DResult<impl ToString> {
                     *x = connected << BACKWARDS_OFFSET | *x & !BACKWARDS_MASK;
                 }
             }
-        // DEBUG: cycle detection
         } else if row[page] & CLOSED_MASK == 0 {
             panic!("cycle detected!");
         }
@@ -46,7 +47,6 @@ fn solve(input: Input) -> DResult<impl ToString> {
             let forward = connections[[i, page]] & FORWARD_MASK >> FORWARD_OFFSET;
             *x = forward << CONNECTED_OFFSET | *x & !CONNECTED_MASK;
         }
-        // DEBUG: cycle detction
         row[page] |= CLOSED_MASK;
     }
     let mut connections = NArray::<2, Box<[u8]>>::new([PAGE_COUNT; 2]);
@@ -78,7 +78,6 @@ fn solve(input: Input) -> DResult<impl ToString> {
                         true
                     }
                     0 => true,
-                    // FIXME: connections contains a cycle
                     // SAFETY: graph is acyclic
                     _ => unreachable!("cycle detected"),
                 }
@@ -88,6 +87,19 @@ fn solve(input: Input) -> DResult<impl ToString> {
             }
             if !connected {
                 open.push(page);
+            }
+        }
+        result += FIRST_PAGE + order[order.len() / 2] as usize;
+    }
+    Ok(result)
+} */
+
+fn solve(input: Input) -> DResult<impl ToString> {
+    let mut result = 0;
+    'order: for order in input.orders {
+        for &[from, to] in order.array_windows() {
+            if input.rules[to as usize].binary_search(&from).is_ok() {
+                continue 'order;
             }
         }
         result += FIRST_PAGE + order[order.len() / 2] as usize;

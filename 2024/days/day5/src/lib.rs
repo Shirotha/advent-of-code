@@ -50,7 +50,13 @@ impl FromStr for Input {
             edges[from as usize - FIRST_PAGE].push(to - FIRST_PAGE as u8);
         }
         Ok(Input {
-            rules: edges.into_iter().map(Vec::into_boxed_slice).collect(),
+            rules: edges
+                .into_iter()
+                .map(|mut v| {
+                    v.sort_unstable();
+                    v.into_boxed_slice()
+                })
+                .collect(),
             orders: orders.into_boxed_slice(),
         })
     }
