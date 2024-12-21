@@ -15,5 +15,9 @@ authors.workspace = true
 version.workspace = true
 edition.workspace = true
 
+[dependencies]
+itertools = "0.13.0"
+num-traits = "0.2.19"
+
 [workspace.dependencies]
 nom = "7.1.3"

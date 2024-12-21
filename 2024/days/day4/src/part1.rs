@@ -4,36 +4,38 @@ use day4::*;
 fn solve(input: Input) -> DResult<impl ToString> {
     let size = *input.data.size();
     let mut matches = NArray::<2, Box<[u32]>>::new(size);
-    let mut update = |pos: [usize; 2], dir: Dir, index: usize| {
+    let mut update = |pos: Pos, dir: Dir, index: usize| {
+        println!("at {:?} -> {:?} * {:?}", pos, dir, index);
         // SAFETY: assumes that other_pos is in-bounds
-        let other_pos = shift(pos, size, dir, 1).unwrap();
-        let Some(other) = linear_search(&WORD, input.data[other_pos]) else {
+        let other_pos = pos + dir;
+        let Some(other) = linear_search(&WORD, input.data[*other_pos]) else {
             return;
         };
         if index + 1 == other {
-            if let Some(root) = shift(pos, size, dir.invert(), index) {
-                matches[root] |= 1 << (dir.offset() + index as u32);
+            if let Some(root) = pos.checked_add(!dir * index) {
+                matches[*root] |= 1 << (offset(dir) + index as u32);
             }
         } else if index == other + 1 {
-            if let Some(root) = shift(pos, size, dir, index) {
-                matches[root] |= 1 << (dir.invert().offset() + other as u32);
+            if let Some(root) = pos.checked_add(dir * index) {
+                matches[*root] |= 1 << (offset(!dir) + other as u32);
             }
         }
     };
     for (pos, &char) in &input.data {
+        let pos = Pos::from(pos);
         let Some(index) = linear_search(&WORD, char) else {
             continue;
         };
         if pos[0] != 0 {
-            update(pos, Dir::Left, index);
+            update(pos, Dirs::Left.dir(), index);
         }
         if pos[1] != 0 {
             if pos[0] != 0 {
-                update(pos, Dir::TopLeft, index);
+                update(pos, Dirs::TopLeft.dir(), index);
             }
-            update(pos, Dir::Top, index);
+            update(pos, Dirs::Top.dir(), index);
             if pos[0] + 1 != size[0] {
-                update(pos, Dir::TopRight, index);
+                update(pos, Dirs::TopRight.dir(), index);
             }
         }
     }

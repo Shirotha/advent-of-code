@@ -10,17 +10,18 @@ fn solve(input: Input) -> DResult<impl ToString> {
         }
     }
     let size = *input.data.size();
-    let check = |pos, dir| -> bool {
+    let check = |pos: Pos, dir: Dir| -> bool {
         // SAFETY: assume: pos is not on the border
-        let corner = shift(pos, size, dir, 1).unwrap();
-        let Some(expected) = invert(input.data[corner]) else {
+        let corner = pos + dir;
+        let Some(expected) = invert(input.data[*corner]) else {
             return false;
         };
-        let other_corner = shift(pos, size, dir.invert(), 1).unwrap();
-        input.data[other_corner] == expected
+        let other_corner = pos - dir;
+        input.data[*other_corner] == expected
     };
     let mut sum = 0;
     for (pos, char) in &input.data {
+        let pos = Pos::from(pos);
         if *char != b'A'
             || pos[0] == 0
             || pos[1] == 0
@@ -29,7 +30,7 @@ fn solve(input: Input) -> DResult<impl ToString> {
         {
             continue;
         }
-        if check(pos, Dir::TopLeft) && check(pos, Dir::TopRight) {
+        if check(pos, Dirs::TopLeft.dir()) && check(pos, Dirs::TopRight.dir()) {
             sum += 1;
         }
     }

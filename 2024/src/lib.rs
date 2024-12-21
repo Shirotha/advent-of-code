@@ -6,10 +6,12 @@
 
 mod range;
 pub use range::*;
+mod nindex;
+pub use nindex::*;
 mod narray;
 pub use narray::*;
 
-use std::io::{stdin, Read};
+use std::io::{Read, stdin};
 
 pub type Error = Box<dyn std::error::Error>;
 pub type DResult<T> = Result<T, Error>;

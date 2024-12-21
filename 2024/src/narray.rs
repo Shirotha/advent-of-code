@@ -1,10 +1,10 @@
 use std::{
     hint::black_box,
-    mem::MaybeUninit,
+    mem::{MaybeUninit, replace},
     ops::{Deref, DerefMut, Index, IndexMut, Range, RangeInclusive},
 };
 
-use crate::RangeAny;
+use crate::{NIndex, RangeAny};
 
 const fn any<const N: usize>(vec: &[usize; N], val: usize) -> bool {
     let mut i = 0;
@@ -54,18 +54,6 @@ const fn last<const N: usize>(size: &[usize; N], stride: &[usize; N]) -> Option<
         i += 1;
     }
     Some(linear(index, stride))
-}
-const fn next<const N: usize>(index: &mut [usize; N], size: &[usize; N]) {
-    if N == 0 {
-        return;
-    }
-    index[0] += 1;
-    let mut i = 0;
-    while i + 1 < N && index[i] >= size[i] {
-        index[i] = 0;
-        i += 1;
-        index[i] += 1;
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -250,20 +238,17 @@ impl<const N: usize, D: DerefMut<Target: IndexMut<usize>>> IndexMut<[usize; N]> 
 
 pub struct Iter<'a, const N: usize, D: Deref<Target: Index<usize>>> {
     data: &'a NArray<N, D>,
-    current: [usize; N],
+    current: NIndex<'a, N>,
 }
 impl<'a, const N: usize, D: Deref<Target: Index<usize>>> Iterator for Iter<'a, N, D> {
     type Item = (
-        [usize; N],
+        NIndex<'a, N>,
         &'a <<D as Deref>::Target as Index<usize>>::Output,
     );
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.current[N - 1] >= self.data.size()[N - 1] {
-            return None;
-        }
-        let result = (self.current, &self.data[self.current]);
-        next(&mut self.current, self.data.size());
+        let next = (self.current + 1)?;
+        let result = (replace(&mut self.current, next), &self.data[*self.current]);
         Some(result)
     }
 }
@@ -274,7 +259,7 @@ impl<'a, const N: usize, D: Deref<Target: Index<usize>>> IntoIterator for &'a NA
     fn into_iter(self) -> Self::IntoIter {
         Iter {
             data: self,
-            current: [0; N],
+            current: NIndex::zero(self.size()),
         }
     }
 }
@@ -282,32 +267,29 @@ impl<const N: usize, D: Deref<Target: Index<usize>>> NArray<N, D> {
     pub fn iter(&self) -> Iter<N, D> {
         Iter {
             data: self,
-            current: [0; N],
+            current: NIndex::zero(self.size()),
         }
     }
 }
 pub struct IterMut<'a, const N: usize, D: DerefMut<Target: IndexMut<usize>>> {
     data: &'a mut NArray<N, D>,
-    current: [usize; N],
+    current: NIndex<'a, N>,
 }
 impl<'a, const N: usize, D: DerefMut<Target: IndexMut<usize>>> Iterator for IterMut<'a, N, D> {
     type Item = (
-        [usize; N],
+        NIndex<'a, N>,
         &'a mut <<D as Deref>::Target as Index<usize>>::Output,
     );
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.current[N - 1] >= self.data.size()[N - 1] {
-            return None;
-        }
+        let next = (self.current + 1)?;
         // SAFETY: value will not be accessed anywhere else
         let value = unsafe {
-            (&mut self.data[self.current] as *mut <<D as Deref>::Target as Index<usize>>::Output)
+            (&mut self.data[*self.current] as *mut <<D as Deref>::Target as Index<usize>>::Output)
                 .as_mut()
                 .unwrap()
         };
-        let result = (self.current, value);
-        next(&mut self.current, self.data.size());
+        let result = (replace(&mut self.current, next), value);
         Some(result)
     }
 }
@@ -318,17 +300,21 @@ impl<'a, const N: usize, D: DerefMut<Target: IndexMut<usize>>> IntoIterator
     type Item = <Self::IntoIter as Iterator>::Item;
 
     fn into_iter(self) -> Self::IntoIter {
+        // SAFETY: size will not be modified during 'a
+        let size = unsafe { (self.size() as *const [usize; N]).as_ref().unwrap() };
         IterMut {
             data: self,
-            current: [0; N],
+            current: NIndex::zero(size),
         }
     }
 }
 impl<const N: usize, D: DerefMut<Target: IndexMut<usize>>> NArray<N, D> {
     pub fn iter_mut(&mut self) -> Iter<N, D> {
+        // SAFETY: size will not be modified during 'a
+        let size = unsafe { (self.size() as *const [usize; N]).as_ref().unwrap() };
         Iter {
             data: self,
-            current: [0; N],
+            current: NIndex::zero(size),
         }
     }
 }
